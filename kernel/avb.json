@@ -1,0 +1,9 @@
+{
+  "device": "cheetah",
+  "rom": "EvolutionX 16, tested with the local 11.10 partition set",
+  "size": 6336,
+  "hash_alg": "sha256",
+  "digest": "51a13c62771ebba4a48b6300f43342f892b225b144eb3ea12767bbdcfd7309fb",
+  "flags": 3,
+  "warning": "Requires the matching custom vbmeta already installed. Verification and hashtree checks are disabled by that vbmeta. Not a generic ROM or OTA profile."
+}

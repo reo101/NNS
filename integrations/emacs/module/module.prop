@@ -1,0 +1,6 @@
+id=nns-emacs
+name=NNS Emacs integration
+version=3.0.0
+versionCode=3
+author=reo101
+description=Optional rootless Nix subprocess integration for native Emacs. No root daemon.

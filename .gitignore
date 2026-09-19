@@ -10,3 +10,5 @@ zig-out/
 # built helper binary
 module/bin/
 *.o
+__pycache__/
+*.elc

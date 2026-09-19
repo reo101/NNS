@@ -2,3 +2,11 @@
 result
 result-*
 /.direnv/
+
+# Zig
+.zig-cache/
+zig-out/
+
+# built helper binary
+module/bin/
+*.o

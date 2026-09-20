@@ -53,17 +53,15 @@ stdenv.mkDerivation {
   '';
   patchPhase = ''
     runHook prePatch
-    mkdir KernelSU .inputs .inputs/workflow .inputs/susfs
+    mkdir KernelSU .inputs .inputs/susfs
     tar -xf ${sources.sukisu} --strip-components=1 -C KernelSU
     (cd KernelSU; patch -p1 < ${./patches/sukisu-version.patch})
-    tar -xf ${sources.workflow} --strip-components=1 -C .inputs/workflow
     tar -xf ${sources.susfs} --strip-components=1 -C .inputs/susfs
     chmod -R u+w KernelSU .inputs
     ln -s ../KernelSU/kernel drivers/kernelsu
     printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-    patch -p1 -l < .inputs/workflow/.github/patches/dirty_allow_vendor_module_crcs.patch
     cp .inputs/susfs/kernel_patches/fs/susfs.c fs/
     cp .inputs/susfs/kernel_patches/include/linux/susfs{,_def}.h include/linux/
     (cd .inputs/susfs; patch -p1 --fuzz=0 < ${./patches/susfs-compat.patch})

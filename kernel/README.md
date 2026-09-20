@@ -29,8 +29,8 @@ include the separate KernelPatch/KPM integration.
 ## Inputs and local patches
 
 `sources.nix` fetches content-hashed archives for the pantah source release,
-LLVM 17.0.6, SukiSU, SuSFS and the workflow's module-CRC compatibility patch.
-There are no references to the old working directory or its toolchains.
+LLVM 17.0.6, SukiSU and SuSFS. There are no references to the old working
+directory or its toolchains.
 
 Only local adjustments live in `patches/`:
 
@@ -52,6 +52,15 @@ hook patches are not used for SukiSU.
 USB HID and the root/hiding features. Do not casually substitute `gki_defconfig`:
 vendor-module ABI depends on configuration as well as compiler version.
 SysV IPC remains disabled, as in the boot-tested configuration.
+
+Android GKI export protection is disabled: this ROM ships unsigned GKI modules,
+including `rfkill.ko`, that export names on the protected list. Leaving that
+protection enabled rejects rfkill and prevents the Wi-Fi dependency chain from
+loading. Normal module signature support remains enabled, but the CRC-forcing
+patch and `MODULE_FORCE_LOAD` are removed. ABI mismatches must fail rather than
+be hidden by forced loading. The repaired image was boot-tested with 321
+modules loaded, the full rfkill/cfg80211/bcmdhd chain present, Wi-Fi associated,
+and the Wi-Fi Settings screen responsive. No forced-load taint was present.
 
 All target and host C/C++ commands pass through sccache. The resolved config
 hash salts its cache key: `configs.c` embeds a gzip via assembler `.incbin`,

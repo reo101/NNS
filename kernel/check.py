@@ -14,6 +14,8 @@ for key in ('USER_NS', 'USB_CONFIGFS_F_HID', 'KSU', 'KSU_SUSFS',
     assert f'CONFIG_{key}=y\n' in config, key
 assert 'CONFIG_PANIC_TIMEOUT=-1\n' in config
 assert '# CONFIG_TRIM_UNUSED_KSYMS is not set\n' in config
+assert '# CONFIG_MODULE_SIG_PROTECT is not set\n' in config
+assert '# CONFIG_MODULE_FORCE_LOAD is not set\n' in config
 cmd = shlex.split(next(line.split('=', 1)[1] for line in config.splitlines()
                       if line.startswith('CONFIG_CMDLINE=')))[0]
 props = dict(item.split('=', 1) for item in cmd.split())

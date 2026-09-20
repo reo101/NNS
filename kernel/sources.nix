@@ -28,11 +28,6 @@ in
     url = "https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases/download/v4.2.0/SukiSU_v4.2.0_40900_releases.apk";
     hash = "sha256-TKmBDmNV+/8Lvkv1zhWYCOZKQNhZh6EYlAMM2ZCmvfM=";
   };
-  workflow = fetch {
-    name = "nns-workflow.tar.gz";
-    url = "https://github.com/yapixel/cheetah_ksu_workflow/archive/b600233157d6ee9e6c8d35d1c79a65c1fdba265f.tar.gz";
-    hash = "sha256-Lf63Z8Op2wDXuTt/dhx97cX29C7ZYdxe2cox/Ow4BkM=";
-  };
   susfs = fetch {
     name = "nns-susfs.tar.gz";
     url = "https://gitlab.com/simonpunk/susfs4ksu/-/archive/273ae364c5b7c92ceb15634c9f075b6fc0501048/susfs4ksu-273ae364c5b7c92ceb15634c9f075b6fc0501048.tar.gz";

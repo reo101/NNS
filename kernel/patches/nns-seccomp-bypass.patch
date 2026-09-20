@@ -1,0 +1,157 @@
+# NNS delta: generic exec-time seccomp bypass allowlist. Android installs a
+# zygote seccomp allowlist on every app process; it denies mount(2),
+# pivot_root(2) and friends, survives a user-namespace unshare, and cannot
+# be removed from userspace, so a rootless namespace launcher cannot
+# function while it is active. Root publishes absolute exec paths in
+# /proc/sys/kernel/seccomp_bypass_paths (newline separated, 8 x 128 max,
+# exact match); execveat() of a match clears the calling task's filter.
+# The check runs in do_execveat_common() ahead of SuSFS's no_su
+# early-exit, which otherwise skips the whole sucompat hook chain for
+# unprivileged apps, making a hook inside it unreachable for the very
+# callers this feature exists for. disable_seccomp() comes from SukiSU
+# under CONFIG_KSU; a kernel without KSU must provide an equivalent
+# helper for this delta to apply.
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -64,6 +64,8 @@
+ #include <linux/io_uring.h>
+ #include <linux/syscall_user_dispatch.h>
+ #include <linux/coredump.h>
++#include <linux/mutex.h>
++#include <linux/sysctl.h>
+ #ifdef CONFIG_KSU_SUSFS
+ #include <linux/susfs_def.h>
+ #endif
+@@ -1916,6 +1918,110 @@
+ 				void *envp, int *flags);
+ #endif
+ 
++/*
++ * Exec-time seccomp bypass allowlist. Android installs a zygote seccomp
++ * allowlist on every app process; it denies mount(2), pivot_root(2) and
++ * friends, survives a user-namespace unshare, and cannot be removed from
++ * userspace. Root may publish absolute exec paths in
++ * /proc/sys/kernel/seccomp_bypass_paths (newline separated); execveat() of
++ * an exact match clears the calling task's seccomp filter, before any
++ * SuSFS no_su gating skips the sucompat hooks. The list is empty by
++ * default, writable only by root, and match is exact.
++ */
++#ifdef CONFIG_KSU
++extern void disable_seccomp(void);
++
++#define EXEC_BYPASS_MAX_PATHS	8
++#define EXEC_BYPASS_PATH_MAX	128
++
++static char exec_bypass_list[EXEC_BYPASS_MAX_PATHS * EXEC_BYPASS_PATH_MAX];
++static int exec_bypass_count;
++static DEFINE_MUTEX(exec_bypass_lock);
++
++static bool exec_bypass_match(const char *name)
++{
++	const char *p;
++	bool match = false;
++
++	if (!READ_ONCE(exec_bypass_count))
++		return false;
++
++	mutex_lock(&exec_bypass_lock);
++	for (p = exec_bypass_list; *p; ) {
++		size_t len = strcspn(p, "\n");
++
++		if (!strncmp(name, p, len) && !name[len]) {
++			match = true;
++			break;
++		}
++		p += len;
++		if (*p == '\n')
++			p++;
++	}
++	mutex_unlock(&exec_bypass_lock);
++	return match;
++}
++
++static int exec_bypass_handler(struct ctl_table *table, int write,
++			       void *buffer, size_t *lenp, loff_t *ppos)
++{
++	char tmp[sizeof(exec_bypass_list)];
++	struct ctl_table tmp_table = {
++		.procname	= table->procname,
++		.data		= tmp,
++		.maxlen		= sizeof(tmp) - 1,
++		.mode		= table->mode,
++	};
++	int ret, n = 0;
++	char *line;
++
++	if (!write)
++		return proc_dostring(table, write, buffer, lenp, ppos);
++
++	ret = proc_dostring(&tmp_table, write, buffer, lenp, ppos);
++	if (ret)
++		return ret;
++
++	for (line = tmp; *line; ) {
++		size_t plen = strcspn(line, "\n");
++
++		if (plen) {
++			if (line[0] != '/' || plen >= EXEC_BYPASS_PATH_MAX)
++				return -EINVAL;
++			if (++n > EXEC_BYPASS_MAX_PATHS)
++				return -EINVAL;
++		}
++		line += plen;
++		if (*line == '\n')
++			line++;
++	}
++
++	mutex_lock(&exec_bypass_lock);
++	strscpy(exec_bypass_list, tmp, sizeof(exec_bypass_list));
++	WRITE_ONCE(exec_bypass_count, n);
++	mutex_unlock(&exec_bypass_lock);
++	return 0;
++}
++
++static struct ctl_table exec_bypass_sysctls[] = {
++	{
++		.procname	= "seccomp_bypass_paths",
++		.data		= exec_bypass_list,
++		.maxlen		= sizeof(exec_bypass_list) - 1,
++		.mode		= 0600,
++		.proc_handler	= exec_bypass_handler,
++	},
++	{ }
++};
++
++static int __init exec_bypass_init(void)
++{
++	register_sysctl_init("kernel", exec_bypass_sysctls);
++	return 0;
++}
++fs_initcall(exec_bypass_init);
++#endif /* CONFIG_KSU */
++
+ static int do_execveat_common(int fd, struct filename *filename,
+ 			      struct user_arg_ptr argv,
+ 			      struct user_arg_ptr envp,
+@@ -1927,6 +2033,21 @@
+ 	if (IS_ERR(filename))
+ 		return PTR_ERR(filename);
+ 
++#ifdef CONFIG_KSU
++	/*
++	 * NNS: the zygote seccomp filter denies the syscalls a private
++	 * namespace needs and survives a user-namespace unshare; drop it
++	 * for exact matches against the root-managed bypass allowlist,
++	 * before the no_su mark can skip the sucompat hooks. A failed
++	 * exec leaves the filter cleared, but the listed paths are
++	 * root-owned and not writable by apps, so only legitimate
++	 * launches reach this branch.
++	 */
++	if (exec_bypass_match(filename->name)) {
++		pr_info("seccomp bypass: clearing filter for %s\n", filename->name);
++		disable_seccomp();
++	}
++#endif
+ #ifdef CONFIG_KSU_SUSFS
+ 	if (likely(susfs_is_current_proc_no_su()))
+ 		goto orig_flow;

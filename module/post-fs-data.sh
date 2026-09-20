@@ -30,6 +30,23 @@ chcon u:object_r:system_file:s0 /data/nix /data/nix/bin || exit 1
 chcon u:object_r:nns_exec:s0 /data/nix/bin/nix-enter.new || exit 1
 mv -f /data/nix/bin/nix-enter.new /data/nix/bin/nix-enter
 
+# This kernel exposes an exec-time seccomp bypass allowlist; register the
+# launcher so app-domain sessions can shed the zygote seccomp filter. On
+# kernels without the sysctl this is a no-op (the launcher is limited to
+# syscall subsets the app filter permits).
+if [ -w /proc/sys/kernel/seccomp_bypass_paths ]; then
+  echo /data/nix/bin/nix-enter > /proc/sys/kernel/seccomp_bypass_paths
+fi
+
+# Nix wants CA certificates; Android ships no /etc/ssl/certs, so point
+# nix.conf at the nss-cacert bundle already inside the store (referenced
+# via /nix, the path visible inside launcher sessions).
+cacert=$(ls /data/nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | head -n 1)
+if [ -n "$cacert" ] && [ -f /data/nix/etc/nix/nix.conf ]; then
+  sed -i '/^ssl-cert-file/d' /data/nix/etc/nix/nix.conf
+  printf 'ssl-cert-file = /nix/store/%s\n' "${cacert#/data/nix/store/}" >> /data/nix/etc/nix/nix.conf
+fi
+
 # convenience symlink inside the store dir for on-device poking
 [ -e /data/local/tmp/nix ] || ln -s /data/nix /data/local/tmp/nix
 

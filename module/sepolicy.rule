@@ -22,9 +22,37 @@ allow nns_app nns_app process { fork sigchld signull signal sigkill getsched }
 # bind the inherited tree and the store into it, then pivot_root. All of it
 # happens inside the launcher's own mount namespace, which dies with the
 # process; nothing outside that namespace is ever remounted.
-allow nns_app fs_type filesystem mount
+allow nns_app fs_type filesystem { mount remount unmount pivot_root }
 allow nns_app fs_type dir mounton
 allow nns_app fs_type file mounton
+# Scratch root and its contents live on the launcher's private tmpfs; the
+# mirror re-creates the root's entries as dirs (bind-backed) and symlinks.
+allow nns_app tmpfs dir { add_name create getattr open read search write remove_name rmdir mounton }
+allow nns_app tmpfs file { create getattr open read write rename unlink }
+allow nns_app tmpfs lnk_file { create getattr read }
+allow nns_app tmpfs filesystem { mount remount unmount pivot_root }
+# The scratch tmpfs is mounted on app-owned storage, and the mirror reads
+# the real root: both app_data_file and rootfs objects are touched.
+allow nns_app app_data_file dir mounton
+allow nns_app app_data_file file mounton
+allow nns_app rootfs dir { open read getattr search }
+allow nns_app rootfs lnk_file { getattr read }
+# Commands run inside the namespace: Android shell and dynamic linker
+# (shell_exec / system_linker_exec / runtime apex) plus store contents,
+# which service.sh labels system_file.
+allow nns_app system_file dir { open read getattr search }
+allow nns_app system_file file { getattr open read map execute execute_no_trans }
+allow nns_app system_file lnk_file { getattr read }
+allow nns_app shell_exec file { getattr open read map execute execute_no_trans }
+allow nns_app system_linker_exec file { getattr open read map execute execute_no_trans }
+allow nns_app system_linker_exec lnk_file { getattr read }
+allow nns_app apex_module_file file { getattr open read map execute execute_no_trans }
+# proc self-inodes (exe, fd, cwd magic links) carry the process's own SID.
+allow nns_app nns_app lnk_file { read getattr create }
+allow nns_app proc dir { getattr open read search }
+allow nns_app proc file { getattr open read map }
+allow nns_app proc lnk_file { read getattr }
+allow nns_app proc_stat file { getattr open read }
 # /proc/self/{uid_map,gid_map} carries the process SID.
 allow nns_app nns_app dir { getattr open read search }
 allow nns_app nns_app file { getattr open read write }

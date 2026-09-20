@@ -73,6 +73,43 @@ bind-mount `~/.cache/sccache` into the sandbox; Nix caches the complete output.
 persistent cache for interactive work. Manual make invocations must set
 `SCCACHE_C_CUSTOM_CACHE_BUSTER` to the resolved config's SHA-256 as well.
 
+## Third-party kernel support contract
+
+What does a kernel need so the NNS module (and its Emacs integration) work
+on it? In order of invasiveness:
+
+1. **`CONFIG_USER_NS=y`.** The generic part. Unprivileged app processes
+   must be able to `unshare(CLONE_NEWUSER|CLONE_NEWNS)` and write their
+   own uid/gid maps; `user.max_user_namespaces` must not be zero for
+   app UIDs.
+
+2. **Exec-time seccomp bypass.** Every zygote-spawned app process carries
+   a seccomp allowlist that denies `mount(2)`, `pivot_root(2)` and
+   friends; the filter survives a user-namespace unshare and cannot be
+   removed from userspace. This kernel therefore exposes
+   `/proc/sys/kernel/seccomp_bypass_paths`: root writes newline-separated
+   absolute exec paths (max 8 x 128 bytes, exact match, 0600), and an
+   `execveat()` of an exact match clears the calling task's seccomp
+   filter. The NNS module registers its launcher there in
+   `post-fs-data.sh`; any other rootless-namespace consumer can do the
+   same. The check lives in `do_execveat_common()` (`nns-seccomp-bypass.patch`)
+   and must run ahead of SuSFS's `no_su` early-exit, which otherwise skips
+   the whole sucompat hook chain for unprivileged apps. The
+   `disable_seccomp()` helper comes from SukiSU under `CONFIG_KSU`; a
+   kernel without KSU must provide an equivalent filter-clearing helper.
+
+3. **SELinux policy injection via the root manager.** The module's
+   `sepolicy.rule` defines the `nns_app` domain and grants the namespace
+   operations (see the file itself; every mount it performs stays inside
+   the launcher's private namespace). Any root manager that can inject
+   policy at boot from a module rule file works — ksud (KernelSU/SukiSU)
+   and magiskpolicy (Magisk) both consume module `sepolicy.rule` files,
+   with slightly different statement support.
+
+SuSFS is not required, but when present its `no_su` mark on unprivileged
+app processes is what forces the hook placement above. Without SuSFS the
+same check can sit anywhere in the exec path.
+
 ## Boot image and AVB constraint
 
 This profile is tied to the already-tested custom vbmeta:

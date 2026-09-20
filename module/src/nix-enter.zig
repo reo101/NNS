@@ -72,8 +72,17 @@ fn enterUserns(uid: u32, gid: u32) void {
     _ = checked(linux.syscall5(.prctl, 38, 1, 0, 0, 0), "no_new_privs");
 }
 
-fn mount(source: ?[*:0]const u8, target: [*:0]const u8, kind: ?[*:0]const u8, flags: u32, data: usize) void {
-    _ = checked(linux.mount(source, target, kind, flags, data), "mount");
+fn mount(op: []const u8, source: ?[*:0]const u8, target: [*:0]const u8, kind: ?[*:0]const u8, flags: u32, data: usize) void {
+    _ = checked2(linux.mount(source, target, kind, flags, data), op);
+}
+
+fn checked2(rc: usize, op: []const u8) usize {
+    const signed: isize = @bitCast(rc);
+    if (signed < 0 and signed >= -4095) {
+        std.debug.print("nix-enter: {s}: errno {d}\n", .{ op, -signed });
+        std.process.exit(1);
+    }
+    return rc;
 }
 
 fn exec(init: std.process.Init, args: []const [*:0]const u8) noreturn {
@@ -153,11 +162,11 @@ pub fn main(init: std.process.Init) !u8 {
     } else {
         _ = checked(linux.unshare(0x00020000), "unshare mount namespace");
     }
-    mount(null, "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
+    mount("make / private", null, "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
 
     var cwd: [4096]u8 = undefined;
     _ = checked(linux.syscall2(.getcwd, @intFromPtr(&cwd), cwd.len), "getcwd");
-    mount("tmpfs", root.ptr, "tmpfs", linux.MS.NOSUID | linux.MS.NODEV, @intFromPtr("mode=755,size=16m"));
+    mount("mount scratch tmpfs", "tmpfs", root.ptr, "tmpfs", linux.MS.NOSUID | linux.MS.NODEV, @intFromPtr("mode=755,size=16m"));
     var buf: [4096]u8 = undefined;
     for ([_][]const u8{ ".nns-host", ".nns-detach", "nix" }) |name| {
         const target = path(&buf, root, name);
@@ -165,8 +174,8 @@ pub fn main(init: std.process.Init) !u8 {
     }
     // Copy the inherited mount tree as a unit. Moving individual inherited
     // mounts fails in less-privileged user namespaces because they are locked.
-    mount("/", path(&buf, root, ".nns-host").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
-    mount(store, path(&buf, root, "nix").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
+    mount("bind host tree", "/", path(&buf, root, ".nns-host").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
+    mount("bind store", store, path(&buf, root, "nix").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
     var original = try std.Io.Dir.openDirAbsolute(init.io, "/", .{ .iterate = true });
     var entries = original.iterate();
     var target_buf: [4096]u8 = undefined;
@@ -181,7 +190,7 @@ pub fn main(init: std.process.Init) !u8 {
         if (entry.kind == .directory) {
             // Real mountpoints preserve cwd/getcwd and paths reported by Git.
             _ = checked(linux.mkdirat(-100, dest.ptr, 0o755), "mirror directory");
-            mount(path(&source_buf, root, target).ptr, dest.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
+            mount("bind mirror", path(&source_buf, root, target).ptr, dest.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
         } else {
             _ = checked(linux.symlinkat(target.ptr, -100, dest.ptr), "mirror root entry");
         }

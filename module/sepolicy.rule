@@ -12,11 +12,19 @@ allow nns_app untrusted_app process sigchld
 allow nns_app nns_exec file { entrypoint getattr open read execute map }
 type_transition untrusted_app nns_exec process nns_app
 # Namespace setup: unshare(CLONE_NEWUSER|CLONE_NEWNS), id maps, mounts.
-# The capability grants cover ns_capable checks SELinux interposes on
-# (CAP_OPT_NOAUDIT denials would otherwise be silently enforced).
+# SELinux checks capabilities in non-init user namespaces against the
+# cap_userns class, not capability.
 allow nns_app nns_app user_namespace create
 allow nns_app nns_app capability { sys_admin setuid setgid }
+allow nns_app nns_app cap_userns { sys_admin setuid setgid }
 allow nns_app nns_app process { fork sigchld signull signal sigkill getsched }
+# Private-namespace construction: make / private, mount the scratch tmpfs,
+# bind the inherited tree and the store into it, then pivot_root. All of it
+# happens inside the launcher's own mount namespace, which dies with the
+# process; nothing outside that namespace is ever remounted.
+allow nns_app fs_type filesystem mount
+allow nns_app fs_type dir mounton
+allow nns_app fs_type file mounton
 # /proc/self/{uid_map,gid_map} carries the process SID.
 allow nns_app nns_app dir { getattr open read search }
 allow nns_app nns_app file { getattr open read write }

@@ -56,7 +56,6 @@ stdenv.mkDerivation {
     mkdir KernelSU .inputs .inputs/susfs
     tar -xf ${sources.sukisu} --strip-components=1 -C KernelSU
     (cd KernelSU; patch -p1 < ${./patches/sukisu-version.patch})
-    (cd KernelSU; patch -p1 --fuzz=0 < ${./patches/sukisu-nns-seccomp.patch})
     tar -xf ${sources.susfs} --strip-components=1 -C .inputs/susfs
     chmod -R u+w KernelSU .inputs
     ln -s ../KernelSU/kernel drivers/kernelsu
@@ -69,6 +68,7 @@ stdenv.mkDerivation {
     patch -p1 < .inputs/susfs/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch
     patch -p1 < ${./patches/susfs-newuname.patch}
     patch -p1 < ${./patches/susfs-taskmmu.patch}
+    patch -p1 < ${./patches/nns-seccomp-exec.patch}
     test -z "$(find . -name '*.rej' -print -quit)"
     patchShebangs scripts tools arch/arm64
     runHook postPatch

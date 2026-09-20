@@ -5,7 +5,9 @@
        (report (expand-file-name "report.txt" directory))
        (temporary-file-directory directory))
   (load (expand-file-name "nns.el" directory) nil t)
-  (setq nns-launcher "/data/nix/.nns-validation/nix-enter")
+  ;; The kernel seccomp-disable hook matches the exact published entrypoint
+  ;; path, so the probe must exec it rather than a scratch copy.
+  (setq nns-launcher "/data/nix/bin/nix-enter")
   (with-temp-buffer
     (insert (format "Emacs: %s\nUID: %s\n" emacs-version (user-uid)))
     (insert-file-contents "/proc/self/attr/current")

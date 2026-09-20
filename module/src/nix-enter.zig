@@ -32,10 +32,30 @@ fn writeProc(name: [*:0]const u8, value: []const u8) void {
 }
 
 fn enterUserns(uid: u32, gid: u32) void {
-    // USER_NS and MOUNT_NS must be created in ONE unshare: an unprivileged
-    // process may only unmount-share a mount namespace owned by a user
-    // namespace it holds capabilities in, which is the new one.
-    _ = checked(linux.unshare(0x10000000 | 0x00020000), "unshare user and mount namespace (requires CONFIG_USER_NS and SELinux/seccomp permission)");
+    var st_buf: [4096]u8 = undefined;
+    const sfd: i32 = @intCast(checked(linux.openat(-100, "/proc/self/status", .{ .ACCMODE = .RDONLY }, 0), "open status"));
+    const n = checked(linux.read(sfd, &st_buf, st_buf.len), "read status");
+    _ = linux.close(sfd);
+    var it = std.mem.splitScalar(u8, st_buf[0..@intCast(n)], '\n');
+    while (it.next()) |l| {
+        if (std.mem.startsWith(u8, l, "Seccomp:") or std.mem.startsWith(u8, l, "CapEff:") or std.mem.startsWith(u8, l, "NoNewPrivs:"))
+            std.debug.print("{s}\n", .{l});
+    }
+    const afd: i32 = @intCast(checked(linux.openat(-100, "/proc/self/attr/current", .{ .ACCMODE = .RDONLY }, 0), "open attr"));
+    const an = checked(linux.read(afd, &st_buf, st_buf.len), "read attr");
+    _ = linux.close(afd);
+    std.debug.print("domain={s}\n", .{std.mem.trimEnd(u8, st_buf[0..@intCast(an)], "\x00\n")});
+    const r1 = linux.unshare(0x10000000 | 0x00020000);
+    std.debug.print("unshare NEWUSER|NEWNS: {d}\n", .{@as(isize, @bitCast(r1))});
+    if (@as(isize, @bitCast(r1)) < 0) {
+        const r2 = linux.unshare(0x10000000);
+        std.debug.print("unshare NEWUSER retry: {d}\n", .{@as(isize, @bitCast(r2))});
+        if (@as(isize, @bitCast(r2)) == 0) {
+            const r3 = linux.unshare(0x00020000);
+            std.debug.print("unshare NEWNS retry: {d}\n", .{@as(isize, @bitCast(r3))});
+            if (@as(isize, @bitCast(r3)) < 0) std.process.exit(1);
+        }
+    }
     // Android's init userns has setgroups enabled and a fresh userns inherits
     // that flag, which blocks the own-gid map. Denying setgroups (still legal
     // before any gid_map write) clears it and is safe for a single-identity

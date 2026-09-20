@@ -9,6 +9,7 @@ stdenvNoCC.mkDerivation {
       ../module/customize.sh
       ../module/post-fs-data.sh
       ../module/service.sh
+      ../module/sepolicy.rule
       ../module/etc/profile
       ../module/etc/nix/nix.conf
     ];
@@ -21,7 +22,7 @@ stdenvNoCC.mkDerivation {
     runHook preBuild
     mkdir -p module/bin module/etc/nix
     cp ${launcher}/bin/nix-enter module/bin/nix-enter
-    cp module.prop customize.sh post-fs-data.sh service.sh module/
+    cp module.prop customize.sh post-fs-data.sh service.sh sepolicy.rule module/
     cp etc/profile module/etc/
     cp etc/nix/nix.conf module/etc/nix/
     touch module/skip_mount

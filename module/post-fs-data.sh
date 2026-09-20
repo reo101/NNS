@@ -19,13 +19,15 @@ chmod 755 /data/nix /data/nix/store /data/nix/var
 chmod 1777 /data/nix/tmp
 
 # /data/adb is deliberately inaccessible to apps. Publish only the static,
-# non-setuid launcher; callers retain their UID and SELinux domain.
+# non-setuid launcher; callers retain their UID and enter the nns_app domain
+# via the sepolicy.rule type_transition.
 chown 0:0 /data/nix/bin
 chmod 755 /data/nix/bin
 rm -f /data/nix/bin/nix-enter.new
 cp "$MODDIR/bin/nix-enter" /data/nix/bin/nix-enter.new || exit 1
 chmod 755 /data/nix/bin/nix-enter.new
-chcon u:object_r:system_file:s0 /data/nix /data/nix/bin /data/nix/bin/nix-enter.new || exit 1
+chcon u:object_r:system_file:s0 /data/nix /data/nix/bin || exit 1
+chcon u:object_r:nns_exec:s0 /data/nix/bin/nix-enter.new || exit 1
 mv -f /data/nix/bin/nix-enter.new /data/nix/bin/nix-enter
 
 # convenience symlink inside the store dir for on-device poking

@@ -1,0 +1,27 @@
+# NNS scoped SELinux policy, applied by ksud at boot before any app runs.
+# The root-owned launcher transitions app callers into the narrow nns_app
+# domain; UID and MLS categories remain enforced by app_data_file labels.
+type nns_app
+typeattribute nns_app { appdomain bluetoothdomain coredomain netdomain untrusted_app_all }
+type nns_exec { file_type exec_type system_file_type }
+allow untrusted_app nns_exec file { getattr open read execute map }
+allow untrusted_app nns_app process { transition siginh rlimitinh }
+allow untrusted_app nns_app process2 { nnp_transition nosuid_transition }
+allow untrusted_app nns_app process noatsecure
+allow nns_app untrusted_app process sigchld
+allow nns_app nns_exec file { entrypoint getattr open read execute map }
+type_transition untrusted_app nns_exec process nns_app
+# Namespace setup: unshare(CLONE_NEWUSER|CLONE_NEWNS), id maps, mounts.
+# The capability grants cover ns_capable checks SELinux interposes on
+# (CAP_OPT_NOAUDIT denials would otherwise be silently enforced).
+allow nns_app nns_app user_namespace create
+allow nns_app nns_app capability { sys_admin setuid setgid }
+allow nns_app nns_app process { fork sigchld signull signal sigkill getsched }
+# /proc/self/{uid_map,gid_map} carries the process SID.
+allow nns_app nns_app dir { getattr open read search }
+allow nns_app nns_app file { getattr open read write }
+# Scratch directory inside the app's own data dir.
+allow nns_app app_data_file dir { add_name create getattr open read remove_name rename rmdir search setattr write }
+allow nns_app app_data_file file { create getattr open read rename setattr unlink write map }
+# Inherited Emacs/process pipes keep the creator's SID.
+allow nns_app untrusted_app fifo_file { read write open getattr ioctl append }

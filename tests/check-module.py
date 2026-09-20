@@ -8,7 +8,7 @@ import zipfile
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
     required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'skip_mount',
-                'bin/nix-enter', 'etc/profile', 'etc/nix/nix.conf'}
+                'sepolicy.rule', 'bin/nix-enter', 'etc/profile', 'etc/nix/nix.conf'}
     assert names == required, names ^ required
     assert z.testzip() is None
     assert 'id=nix\n' in z.read('module.prop').decode()

@@ -56,6 +56,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         bundle = pkgs.runCommand "nns-cheetah" { } ''
           mkdir -p "$out/bin"
           ln -s ${kernel} "$out/kernel"
+          ln -s ${sources.sukisuManager} "$out/SukiSU-manager.apk"
           ln -s ${module}/nns-module.zip "$out/nns-module.zip"
           ln -s ${module}/module "$out/module"
           ln -s ${emacs}/nns-emacs.zip "$out/nns-emacs.zip"
@@ -66,6 +67,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
       {
         packages = {
           nns-module = module;
+          sukisu-manager = sources.sukisuManager;
           nix-enter = launcher;
           emacs-integration = emacs;
           repack-boot = repacker;

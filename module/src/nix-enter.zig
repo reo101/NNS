@@ -21,19 +21,30 @@ fn path(buf: []u8, base: []const u8, name: []const u8) [:0]u8 {
 }
 
 fn writeProc(name: [*:0]const u8, value: []const u8) void {
-    const fd: i32 = @intCast(checked(linux.openat(-100, name, .{ .ACCMODE = .WRONLY }, 0), "open namespace mapping"));
+    const fd: i32 = @intCast(checked(linux.openat(-100, name, .{ .ACCMODE = .WRONLY }, 0), std.mem.span(name)));
     defer _ = linux.close(fd);
-    if (checked(linux.write(fd, value.ptr, value.len), "write namespace mapping") != value.len) {
+    var op_buf: [64]u8 = undefined;
+    const op = std.fmt.bufPrint(&op_buf, "write {s}", .{std.mem.span(name)}) catch "write namespace mapping";
+    if (checked(linux.write(fd, value.ptr, value.len), op) != value.len) {
         std.debug.print("nix-enter: short namespace mapping write\n", .{});
         std.process.exit(1);
     }
 }
 
 fn enterUserns(uid: u32, gid: u32) void {
-    _ = checked(linux.unshare(0x10000000), "unshare user namespace (requires USER_NS and SELinux/seccomp permission)");
+    // USER_NS and MOUNT_NS must be created in ONE unshare: an unprivileged
+    // process may only unmount-share a mount namespace owned by a user
+    // namespace it holds capabilities in, which is the new one.
+    _ = checked(linux.unshare(0x10000000 | 0x00020000), "unshare user and mount namespace (requires CONFIG_USER_NS and SELinux/seccomp permission)");
+    // Android's init userns has setgroups enabled and a fresh userns inherits
+    // that flag, which blocks the own-gid map. Denying setgroups (still legal
+    // before any gid_map write) clears it and is safe for a single-identity
+    // store mount.
     writeProc("/proc/self/setgroups", "deny");
     var buf: [96]u8 = undefined;
     // Capture IDs BEFORE unshare. Preserve numeric identity for Android/glibc.
+    // The kernel compares the opener's kuid with the namespace owner kuid, so
+    // the child may write its own maps.
     const uid_map = std.fmt.bufPrint(&buf, "{d} {d} 1\n", .{ uid, uid }) catch unreachable;
     writeProc("/proc/self/uid_map", uid_map);
     const gid_map = std.fmt.bufPrint(&buf, "{d} {d} 1\n", .{ gid, gid }) catch unreachable;
@@ -117,8 +128,11 @@ pub fn main(init: std.process.Init) !u8 {
     if (linux.getppid() != parent_pid) return 1;
     const uid = linux.getuid();
     const gid = linux.getgid();
-    if (userns) enterUserns(uid, gid);
-    _ = checked(linux.unshare(0x00020000), "unshare mount namespace");
+    if (userns) {
+        enterUserns(uid, gid);
+    } else {
+        _ = checked(linux.unshare(0x00020000), "unshare mount namespace");
+    }
     mount(null, "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
 
     var cwd: [4096]u8 = undefined;

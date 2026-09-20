@@ -1,11 +1,42 @@
-{ lib, stdenv, sources, clang, sccache, python3, perl, bc, bison, flex
-, openssl, elfutils, zlib, pkg-config, pahole, which }:
+{
+  lib,
+  stdenv,
+  sources,
+  clang,
+  sccache,
+  python3,
+  perl,
+  bc,
+  bison,
+  flex,
+  openssl,
+  elfutils,
+  zlib,
+  pkg-config,
+  pahole,
+  which,
+}:
 stdenv.mkDerivation {
   pname = "cheetah-kernel";
-  version = "6.1.162-nns";
+  version = "6.1.162-sukisu-nns";
   src = sources.pantah;
-  nativeBuildInputs = [ clang sccache python3 perl bc bison flex pkg-config pahole which ];
-  buildInputs = [ openssl elfutils zlib ];
+  nativeBuildInputs = [
+    clang
+    sccache
+    python3
+    perl
+    bc
+    bison
+    flex
+    pkg-config
+    pahole
+    which
+  ];
+  buildInputs = [
+    openssl
+    elfutils
+    zlib
+  ];
   hardeningDisable = [ "all" ];
   dontStrip = true;
   dontFixup = true;
@@ -23,7 +54,8 @@ stdenv.mkDerivation {
   patchPhase = ''
     runHook prePatch
     mkdir KernelSU .inputs .inputs/workflow .inputs/susfs
-    tar -xf ${sources.ksu} --strip-components=1 -C KernelSU
+    tar -xf ${sources.sukisu} --strip-components=1 -C KernelSU
+    (cd KernelSU; patch -p1 < ${./patches/sukisu-version.patch})
     tar -xf ${sources.workflow} --strip-components=1 -C .inputs/workflow
     tar -xf ${sources.susfs} --strip-components=1 -C .inputs/susfs
     chmod -R u+w KernelSU .inputs
@@ -31,16 +63,13 @@ stdenv.mkDerivation {
     printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-    patch -p1 -l < .inputs/workflow/.github/patches/manual-security-hooks-v2.0.patch
-    patch -p1 -l < .inputs/workflow/.github/patches/scope-min-manual-hooks-v2.3.patch
     patch -p1 -l < .inputs/workflow/.github/patches/dirty_allow_vendor_module_crcs.patch
     cp .inputs/susfs/kernel_patches/fs/susfs.c fs/
     cp .inputs/susfs/kernel_patches/include/linux/susfs{,_def}.h include/linux/
-    patch -p1 < ${./patches/susfs-6.1.162.patch}
+    (cd .inputs/susfs; patch -p1 --fuzz=0 < ${./patches/susfs-compat.patch})
+    patch -p1 < .inputs/susfs/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch
     patch -p1 < ${./patches/susfs-newuname.patch}
     patch -p1 < ${./patches/susfs-taskmmu.patch}
-    patch -p1 -l < .inputs/workflow/.github/patches/xxksu/55_try_umount_for_susfs.patch
-    (cd KernelSU; patch -p1 -l --fuzz=3 < ${./patches/ksu-susfs.patch})
     test -z "$(find . -name '*.rej' -print -quit)"
     patchShebangs scripts tools arch/arm64
     runHook postPatch
@@ -74,6 +103,9 @@ stdenv.mkDerivation {
   '';
   buildPhase = ''
     runHook preBuild
+    # Generate SELinux's private headers before validating the root integration.
+    make -j"$NIX_BUILD_CORES" "''${flags[@]}" V=1 security/selinux/
+    make -j"$NIX_BUILD_CORES" "''${flags[@]}" V=1 drivers/kernelsu/ksu.o
     make -j"$NIX_BUILD_CORES" "''${flags[@]}" V=1 Image
     sccache --show-stats
     runHook postBuild
@@ -94,7 +126,7 @@ stdenv.mkDerivation {
     runHook postInstall
   '';
   meta = {
-    description = "Boot-tested cheetah ACK kernel with xxKSU, SuSFS, USER_NS and USB HID";
+    description = "Cheetah ACK kernel with SukiSU Ultra, SuSFS, USER_NS and USB HID";
     platforms = [ "x86_64-linux" ];
     license = lib.licenses.gpl2Only;
   };

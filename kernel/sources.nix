@@ -6,7 +6,8 @@ let
   });
 in
 {
-  # All three integration archives were compared against the boot-tested tree.
+  # Upstream sources and patches are fetched by content hash; only local
+  # integration fixes live in kernel/patches.
   pantah = fetch {
     name = "pantah.tar.xz";
     url = "https://github.com/yapixel/gki-build-assets/releases/download/pantah-15260412/kernel-pantah-15260412.tar.xz";
@@ -17,10 +18,10 @@ in
     url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04.tar.xz";
     hash = "sha256-iE7mfWR9d+WHQMHmRWSeKa6eim/ofBN2vg86MPPMmrM=";
   };
-  ksu = fetch {
-    name = "nns-ksu.tar.gz";
-    url = "https://github.com/backslashxx/KernelSU/archive/1d867429705d0aec7051667913c22d16237db312.tar.gz";
-    hash = "sha256-dniKSQFJnf8y41buPCxFb3XNfpL0XmzmIG4S9r293fI=";
+  sukisu = fetch {
+    name = "nns-sukisu-builtin.tar.gz";
+    url = "https://github.com/SukiSU-Ultra/SukiSU-Ultra/archive/b20dee702035af09cb2ecb5f35443bbc1747f3e6.tar.gz";
+    hash = "sha256-lyiNrw9IEtObfyW+QT6pP/69c0teLKsu0MbQ6OobmQ0=";
   };
   workflow = fetch {
     name = "nns-workflow.tar.gz";

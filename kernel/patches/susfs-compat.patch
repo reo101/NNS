@@ -1,0 +1,123 @@
+--- a/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch
++++ b/kernel_patches/50_add_susfs_in_gki-android14-6.1.patch
+@@ -41,7 +41,7 @@
+  obj-y +=	buffer.o direct-io.o mpage.o
+  else
+ diff --git a/fs/exec.c b/fs/exec.c
+-index 28e8203de..5826b8670 100644
++index 28e8203de..f052aa215 100644
+ --- a/fs/exec.c
+ +++ b/fs/exec.c
+ @@ -64,6 +64,9 @@
+@@ -54,7 +54,7 @@
+  
+  #ifndef __GENKSYMS__
+  #include <linux/dma-buf.h>
+-@@ -1903,6 +1906,18 @@ static int bprm_execve(struct linux_binprm *bprm,
++@@ -1903,6 +1906,16 @@ static int bprm_execve(struct linux_binprm *bprm,
+  	return retval;
+  }
+  
+@@ -66,21 +66,12 @@
+ +			void *envp, int *flags);
+ +extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
+ +				void *envp, int *flags);
+-+extern int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv,
+-+				void *envp, int *flags, int *retval);
+ +#endif
+ +
+  static int do_execveat_common(int fd, struct filename *filename,
+  			      struct user_arg_ptr argv,
+  			      struct user_arg_ptr envp,
+-@@ -1910,10 +1925,28 @@ static int do_execveat_common(int fd, struct filename *filename,
+- {
+- 	struct linux_binprm *bprm;
+- 	int retval;
+-+#ifdef CONFIG_KSU_SUSFS
+-+	bool is_su_session = false;
+-+#endif // #ifdef CONFIG_KSU_SUSFS
+- 
++@@ -1914,6 +1927,20 @@ static int do_execveat_common(int fd, struct filename *filename,
+  	if (IS_ERR(filename))
+  		return PTR_ERR(filename);
+  
+@@ -89,11 +80,10 @@
+ +		goto orig_flow;
+ +
+ +	if (static_branch_likely(&ksu_su_compat_enabled)) {
+-+		if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted)) {
+-+			is_su_session = !ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+-+		} else {
+-+			is_su_session = !ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+-+		}
+++		if (static_branch_unlikely(&susfs_is_sdcard_android_data_not_decrypted))
+++			ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+++		else
+++			ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+ +	}
+ +
+ +orig_flow:
+@@ -102,17 +92,6 @@
+  	/*
+  	 * We move the actual failure in case of RLIMIT_NPROC excess from
+  	 * set*uid() to execve() because too many poorly written programs
+-@@ -1980,6 +2013,10 @@ static int do_execveat_common(int fd, struct filename *filename,
+- 	}
+- 
+- 	retval = bprm_execve(bprm, fd, filename, flags);
+-+#ifdef CONFIG_KSU_SUSFS
+-+	if (unlikely(is_su_session))
+-+		(void)ksu_handle_post_execveat_sucompat(&fd, &filename, &argv, &envp, &flags, &retval);
+-+#endif // #ifdef CONFIG_KSU_SUSFS
+- out_free:
+- 	free_bprm(bprm);
+- 
+ diff --git a/fs/namei.c b/fs/namei.c
+ index 8e9c0b567..119b93fca 100644
+ --- a/fs/namei.c
+@@ -559,7 +538,7 @@
+ index f22f76d9c..1d7e79262 100644
+ --- a/fs/namespace.c
+ +++ b/fs/namespace.c
+-@@ -32,10 +32,20 @@
++@@ -32,11 +32,21 @@
+  #include <linux/fs_context.h>
+  #include <linux/shmem_fs.h>
+  #include <linux/mnt_idmapping.h>
+@@ -569,6 +548,7 @@
+  
+  #include "pnode.h"
+  #include "internal.h"
++ #include <trace/hooks/blk.h>
+  
+ +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+ +extern bool susfs_is_current_ksu_domain(void);
+@@ -2273,28 +2253,6 @@
+  	kruid = make_kuid(ns, ruid);
+  	keuid = make_kuid(ns, euid);
+  	ksuid = make_kuid(ns, suid);
+-@@ -1298,12 +1305,21 @@ static int override_release(char __user *release, size_t len)
+- 	return ret;
+- }
+- 
+-+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+-+extern struct static_key_false susfs_is_uname_spoof_buffer_set;
+-+extern void susfs_spoof_uname(struct new_utsname* tmp);
+-+#endif
+-+
+- SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
+- {
+- 	struct new_utsname tmp;
+- 
+- 	down_read(&uts_sem);
+- 	memcpy(&tmp, utsname(), sizeof(tmp));
+-+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+-+	if (static_branch_likely(&susfs_is_uname_spoof_buffer_set))
+-+		susfs_spoof_uname(&tmp);
+-+#endif
+- 	up_read(&uts_sem);
+- 	if (copy_to_user(name, &tmp, sizeof(tmp)))
+- 		return -EFAULT;
+ diff --git a/mm/memory.c b/mm/memory.c
+ index 58cd1a431..0be8de3f1 100644
+ --- a/mm/memory.c

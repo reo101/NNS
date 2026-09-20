@@ -56,6 +56,7 @@ stdenv.mkDerivation {
     mkdir KernelSU .inputs .inputs/susfs
     tar -xf ${sources.sukisu} --strip-components=1 -C KernelSU
     (cd KernelSU; patch -p1 < ${./patches/sukisu-version.patch})
+    (cd KernelSU; patch -p1 --fuzz=0 < ${./patches/sukisu-nns-seccomp.patch})
     tar -xf ${sources.susfs} --strip-components=1 -C .inputs/susfs
     chmod -R u+w KernelSU .inputs
     ln -s ../KernelSU/kernel drivers/kernelsu

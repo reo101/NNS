@@ -25,6 +25,7 @@
   :type 'file :group 'nns)
 (defvar nns--inhibit nil)
 (defvar nns-mode nil)
+(defvar android-use-exec-loader)
 
 (defun nns--command (command)
   "Prefix COMMAND without interpreting or concatenating its arguments."
@@ -40,6 +41,9 @@
 (defun nns--invoke (function &rest args)
   "Call FUNCTION with ARGS and a process-local Nix environment."
   (let ((nns--inhibit t)
+        ;; Android's emulated exec bypasses SELinux entrypoint transitions and
+        ;; traces descendants from outside their new mount namespace.
+        (android-use-exec-loader nil)
         (process-environment (copy-sequence process-environment)))
     (setenv "PATH" (concat (directory-file-name nns-profile) "/bin:"
                           (or (getenv "PATH") "/system/bin")))

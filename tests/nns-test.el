@@ -2,6 +2,10 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'nns)
+;; The Android C variable must stay dynamically bound here; a valueless
+;; declaration is enough for the reader, and the let below needs it to be
+;; special rather than a lexical slot.
+(defvar android-use-exec-loader t)
 
 (defmacro nns-test--configured (&rest body)
   `(let ((nns-mode t) (nns--inhibit nil)
@@ -55,6 +59,11 @@
      (should (equal (nns--invoke (lambda () (getenv "PATH")))
                     (concat "/nix/profile/bin:" before)))
      (should (equal (getenv "PATH") before)))))
+
+(ert-deftest nns-uses-real-exec-only-for-its-children ()
+  (let ((android-use-exec-loader t))
+    (should-not (nns--invoke (lambda () android-use-exec-loader)))
+    (should android-use-exec-loader)))
 
 (ert-deftest nns-executable-find-uses-namespace ()
   (nns-test--configured

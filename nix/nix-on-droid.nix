@@ -70,7 +70,9 @@ let
     export NIX_CONF_DIR=/nix/etc/nix
     export TMPDIR="$HOME/tmp"
 
-    mkdir -p "$TMPDIR"
+    # The app's session PATH may not include /system/bin (Termux-style),
+    # so no PATH lookups before the launcher takes over.
+    /system/bin/mkdir -p "$TMPDIR"
 
     exec ${cfg.launcher} -- ${loginInner} "$@"
   '';

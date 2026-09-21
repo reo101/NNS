@@ -1,5 +1,5 @@
 ;;; nns.el --- Run local subprocesses in a native Nix namespace -*- lexical-binding: t; -*-
-;; Version: 3.0.0
+;; Version: 3.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: processes, tools
 ;;
@@ -17,8 +17,10 @@
 (defcustom nns-store "/data/nix"
   "Physical backing directory for canonical /nix."
   :type 'directory :group 'nns)
-(defcustom nns-profile "/nix/var/nix/profiles/profile"
-  "Profile whose bin directory is searched inside the namespace."
+(defcustom nns-profile "/nix/var/nix/profiles/default"
+  "Profile whose bin directory is searched inside the namespace.
+The default bootstrap profile provides nix, git and bash for every
+hosting app; point this at another profile for a richer PATH."
   :type 'directory :group 'nns)
 (defcustom nns-system-shell "/system/bin/sh"
   "Existing Android shell used for namespace diagnostics and shell sessions."
@@ -92,6 +94,48 @@
             (buffer-string)
           (funcall function command remote))))))
 
+(defun nns--nix-file-p (file)
+  (and nns-mode (not nns--inhibit)
+       (stringp file) (string-prefix-p "/nix/" file)))
+
+(defun nns--ns-test (file test)
+  "Return non-nil when TEST passes for FILE inside the namespace."
+  (let ((status (apply #'nns--invoke #'call-process nns-launcher nil nil nil
+                       (cdr (nns--command
+                             (list nns-system-shell "-c"
+                                   (concat test " \"$1\"")
+                                   "nns-file-test" file))))))
+    (and (integerp status) (zerop status))))
+
+(defun nns--file-executable-p (function file)
+  ;; Eshell resolves external commands with a native stat, which cannot
+  ;; see /nix; ask a namespace child instead of returning nil.
+  (if (nns--nix-file-p file)
+      (nns--ns-test file "test -x")
+    (funcall function file)))
+
+(defun nns--file-regular-p (function file)
+  (if (nns--nix-file-p file)
+      (nns--ns-test file "test -f")
+    (funcall function file)))
+
+(defun nns--eshell-get-path (function &optional literal-p)
+  ;; Eshell's $PATH derives from `exec-path', which never contains the
+  ;; namespace's profile; prepend it so eshell resolves like the child env.
+  (let ((path (funcall function literal-p)))
+    (if (not (and nns-mode (not nns--inhibit)
+                  (not (file-remote-p default-directory))
+                  path))
+        path
+      (let ((bin (directory-file-name (file-name-concat nns-profile "bin"))))
+        (cons bin (remove bin path))))))
+
+(defun nns--eshell-advice (enable)
+  (with-eval-after-load 'esh-util
+    (if enable
+        (advice-add 'eshell-get-path :around #'nns--eshell-get-path)
+      (advice-remove 'eshell-get-path #'nns--eshell-get-path))))
+
 ;;;###autoload
 (defun nns-check ()
   "Test namespace setup from this Emacs process's actual Android domain.
@@ -125,10 +169,13 @@ Remote/TRAMP processes are left alone.  Disable to run outside NNS."
                   (call-process-region . nns--call-process-region)
                   (start-process . nns--start-process)
                   (make-process . nns--make-process)
-                  (executable-find . nns--executable-find)))
+                  (executable-find . nns--executable-find)
+                  (file-executable-p . nns--file-executable-p)
+                  (file-regular-p . nns--file-regular-p)))
     (if nns-mode
         (advice-add (car pair) :around (cdr pair))
-      (advice-remove (car pair) (cdr pair)))))
+      (advice-remove (car pair) (cdr pair))))
+  (nns--eshell-advice nns-mode))
 
 ;;;###autoload
 (defun nns-shell ()

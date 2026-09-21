@@ -74,6 +74,27 @@
      (should (equal (nns--executable-find (lambda (&rest _) nil) "git")
                     "/nix/profile/bin/git")))))
 
+(ert-deftest nns-file-predicates-ask-namespace-for-nix ()
+  (nns-test--configured
+   (cl-letf (((symbol-function 'call-process) (lambda (&rest _) 0)))
+     (should (nns--file-executable-p (lambda (_) nil) "/nix/profile/bin/nix"))
+     (should (nns--file-regular-p (lambda (_) nil) "/nix/profile/bin/nix")))
+   (cl-letf (((symbol-function 'call-process) (lambda (&rest _) 1)))
+     (should-not (nns--file-executable-p (lambda (_) t) "/nix/missing")))
+   (should (nns--file-executable-p (lambda (_) t) "/usr/bin/ls"))
+   (let ((nns--inhibit t))
+     (should (nns--file-executable-p (lambda (_) t) "/nix/profile/bin/nix")))))
+
+(ert-deftest nns-eshell-path-prepends-profile ()
+  (nns-test--configured
+   (should (equal (nns--eshell-get-path (lambda (&rest _) '("/data/bin")))
+                  '("/nix/profile/bin" "/data/bin")))
+   (should (equal (nns--eshell-get-path (lambda (&rest _) '("/nix/profile/bin")))
+                  '("/nix/profile/bin")))
+   (let ((nns-mode nil))
+     (should (equal (nns--eshell-get-path (lambda (&rest _) '("/data/bin")))
+                    '("/data/bin"))))))
+
 (ert-deftest nns-probe-fails-closed ()
   (nns-test--configured
    (cl-letf (((symbol-function 'call-process)

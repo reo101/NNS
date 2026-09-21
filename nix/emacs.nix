@@ -1,7 +1,7 @@
 { lib, stdenvNoCC, emacs-nox, zip, python3 }:
 stdenvNoCC.mkDerivation {
   pname = "nns-emacs";
-  version = "3.0.0";
+  version = "3.1.0";
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.unions [ ../integrations/emacs ../tests/nns-test.el ];

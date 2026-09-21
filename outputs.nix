@@ -38,6 +38,34 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           androidToolchain = androidPkgs.stdenv.cc.cc;
         };
         module = pkgs.callPackage ./nix/module.nix { inherit launcher dns; };
+        androidTestPkgs = import inputs.nixpkgs {
+          inherit system;
+          config = { allowUnfree = true; android_sdk.accept_license = true; };
+        };
+        androidTestSdk = (androidTestPkgs.androidenv.composeAndroidPackages {
+          platformVersions = [ "35" ];
+          buildToolsVersions = [ "35.0.0" ];
+          abiVersions = [ "x86_64" ];
+          systemImageTypes = [ "google_apis" ];
+          includeSystemImages = true;
+          includeEmulator = true;
+          includeNDK = false;
+        }).androidsdk;
+        stockAndroidKernel = pkgs.runCommandLocal "android35-stock-kernel" { allowedReferences = [ ]; } ''
+          cp ${androidTestSdk}/libexec/android-sdk/system-images/android-35/google_apis/x86_64/kernel-ranchu "$out"
+        '';
+        androidTestKernel = pkgs.callPackage ./nix/android-test-kernel.nix {
+          inherit sources;
+          stockKernel = stockAndroidKernel;
+        };
+        dnsX86 = dns.override { arch = "x86_64"; };
+        moduleX86 = module.override { launcher = hostLauncher; dns = dnsX86; arch = "x64"; };
+        androidTest = import ./nix/android-vm-test.nix {
+          inherit pkgs lib sources;
+          androidSdk = androidTestSdk;
+          kernel = androidTestKernel;
+          module = moduleX86;
+        };
         emacs = pkgs.callPackage ./nix/emacs.nix { };
         usernsTest = pkgs.writeShellApplication {
           name = "nns-test-userns";
@@ -87,6 +115,12 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           test-emacs = emacsTest;
         } // lib.optionalAttrs (system == "x86_64-linux") {
           kernel-cheetah = kernel;
+          kernel-android-test = androidTestKernel;
+          android-test-sdk = androidTestSdk;
+          nns-module-x86_64 = moduleX86;
+          test-android = androidTest.driver;
+          android-vm-test = androidTest;
+          android-test-apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
           clang-cheetah = clang;
           cheetah = bundle;
           default = bundle;

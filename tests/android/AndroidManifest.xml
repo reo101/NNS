@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="xyz.reo101.nnstest">
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="NNS integration probe" android:debuggable="false" />
+    <instrumentation android:name=".Probe" android:targetPackage="xyz.reo101.nnstest" />
+</manifest>

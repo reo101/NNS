@@ -1,10 +1,11 @@
 #!/system/bin/sh
 # Sourced by Magisk/KernelSU's manager installer. No recovery or network setup.
 [ "$BOOTMODE" = true ] || abort "Install NNS from the root manager, not recovery."
-[ "$ARCH" = arm64 ] || abort "NNS currently supports arm64 only."
+[ "$ARCH" = @ARCH@ ] || abort "This NNS build requires @ARCH@."
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/bin/nix-enter" 0 0 0755
+set_perm "$MODPATH/bin/nns-resolver" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
 

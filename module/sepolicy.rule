@@ -50,6 +50,7 @@ allow nns_app system_file dir { open read getattr search }
 allow nns_app system_file file { getattr open read map execute execute_no_trans }
 allow nns_app system_file lnk_file { getattr read }
 allow nns_app shell_exec file { getattr open read map execute execute_no_trans }
+allow nns_app toolbox_exec file { getattr open read map execute execute_no_trans }
 allow nns_app system_linker_exec file { getattr open read map execute execute_no_trans }
 allow nns_app system_linker_exec lnk_file { getattr read }
 allow nns_app apex_module_file file { getattr open read map execute execute_no_trans }
@@ -72,6 +73,9 @@ allow nns_app system_file unix_stream_socket connectto
 allow nns_app ksu unix_stream_socket { connectto getattr getopt read write }
 allow nns_app ksu_file unix_stream_socket { connectto getattr getopt read write }
 allow nns_app nns_app unix_stream_socket { connect create getattr getopt read setopt shutdown write }
+# Adding a runtime type to netdomain does not regenerate compiled `self`
+# socket rules. Permit ordinary client sockets explicitly for the new type.
+allow nns_app nns_app { tcp_socket udp_socket } { connect create getattr getopt read setopt shutdown write }
 # Scratch directory inside the app's own data dir.
 allow nns_app app_data_file dir { add_name create getattr open read remove_name rename rmdir search setattr write }
 allow nns_app app_data_file file { create getattr open read rename setattr unlink write map }

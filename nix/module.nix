@@ -1,6 +1,6 @@
-{ lib, stdenvNoCC, launcher, dns, zip, python3 }:
+{ lib, stdenvNoCC, launcher, dns, zip, python3, arch ? "arm64" }:
 stdenvNoCC.mkDerivation {
-  pname = "nns-module";
+  pname = "nns-module-${arch}";
   version = "3.0.0";
   src = lib.fileset.toSource {
     root = ../module;
@@ -25,6 +25,7 @@ stdenvNoCC.mkDerivation {
     cp ${dns}/bin/nns-resolver module/bin/nns-resolver
     cp ${dns}/lib/libnns-dns.so module/lib/libnns-dns.so
     cp module.prop customize.sh post-fs-data.sh service.sh sepolicy.rule module/
+    substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
     cp etc/profile module/etc/
     cp etc/nix/nix.conf module/etc/nix/
     touch module/skip_mount
@@ -41,7 +42,7 @@ stdenvNoCC.mkDerivation {
   '';
   doInstallCheck = true;
   installCheckPhase = ''
-    python3 ${../tests/check-module.py} "$out/nns-module.zip"
+    python3 ${../tests/check-module.py} "$out/nns-module.zip" ${arch}
   '';
   meta = {
     description = "Native Nix Store module ZIP for Magisk and KernelSU managers";

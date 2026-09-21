@@ -5,6 +5,8 @@ import struct
 import sys
 import zipfile
 
+arch = sys.argv[2] if len(sys.argv) > 2 else 'arm64'
+machine = {'arm64': 183, 'x64': 62}[arch]
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
     required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'skip_mount',
@@ -22,7 +24,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
         assert z.read(name).startswith(b'#!/system/bin/sh\n')
     elf = z.read('bin/nix-enter')
     assert elf[:6] == b'\x7fELF\x02\x01'
-    assert struct.unpack_from('<H', elf, 18)[0] == 183, 'not AArch64'
+    assert struct.unpack_from('<H', elf, 18)[0] == machine, arch
     phoff = struct.unpack_from('<Q', elf, 32)[0]
     entsize, count = struct.unpack_from('<HH', elf, 54)
     assert all(struct.unpack_from('<I', elf, phoff+i*entsize)[0] != 3
@@ -30,7 +32,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     for name in ('bin/nns-resolver', 'lib/libnns-dns.so'):
         elf = z.read(name)
         assert elf[:6] == b'\x7fELF\x02\x01'
-        assert struct.unpack_from('<H', elf, 18)[0] == 183, name
+        assert struct.unpack_from('<H', elf, 18)[0] == machine, name
         assert b'/nix/store/' not in elf, name
     assert b'/system/bin/linker64\x00' in z.read('bin/nns-resolver')
 print('PASS: module ZIP layout, timestamps, modes, Android shebangs, static launcher and Android DNS ELFs')

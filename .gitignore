@@ -1,6 +1,7 @@
 # Nix
 result
 result-*
+outputs/
 /.direnv/
 
 # Zig

@@ -1,6 +1,6 @@
-{ lib, stdenvNoCC, zig, python3, androidToolchain }:
+{ lib, stdenvNoCC, zig, python3, androidToolchain, arch ? "aarch64" }:
 stdenvNoCC.mkDerivation {
-  pname = "nns-dns";
+  pname = "nns-dns-${arch}";
   version = "3.0.0";
   src = lib.fileset.toSource {
     root = ../.;
@@ -18,7 +18,7 @@ stdenvNoCC.mkDerivation {
   allowedReferences = [ ];
   buildPhase = ''
     export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-    zig build -Doptimize=ReleaseSmall \
+    zig build -Doptimize=ReleaseSmall -Darch=${arch} \
       -Dandroid-sysroot=${androidToolchain}/toolchain/sysroot --prefix "$out"
   '';
   doCheck = true;

@@ -3,8 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const sysroot = b.option([]const u8, "android-sysroot", "NDK toolchain/sysroot (required for the Android helper)");
-    const android = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .android, .android_api_level = 29 });
-    const glibc = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu });
+    const arch = b.option(std.Target.Cpu.Arch, "arch", "Android CPU architecture") orelse .aarch64;
+    if (arch != .aarch64 and arch != .x86_64) @panic("NNS supports aarch64 and x86_64");
+    const triple = b.fmt("{s}-linux-android", .{@tagName(arch)});
+    const android = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .linux, .abi = .android, .android_api_level = 29 });
+    const glibc = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .linux, .abi = .gnu });
 
     const bridge = addBridge(b, "nns-dns", glibc, optimize);
     b.installArtifact(bridge);
@@ -12,17 +15,17 @@ pub fn build(b: *std.Build) void {
         // Zig knows the Android ABI, but the NDK supplies Bionic headers, link
         // stubs and CRT objects. Generate its libc descriptor in the build
         // cache instead of checking machine-specific paths into the repo.
-        const libdir = b.fmt("{s}/usr/lib/aarch64-linux-android/29", .{root});
+        const libdir = b.fmt("{s}/usr/lib/{s}/29", .{ root, triple });
         const libc_file = b.addWriteFiles().add("android-libc.conf", b.fmt(
             \\include_dir={s}/usr/include
-            \\sys_include_dir={s}/usr/include/aarch64-linux-android
+            \\sys_include_dir={s}/usr/include/{s}
             \\crt_dir={s}
             \\static_crt_dir=
             \\gcc_dir=
             \\msvc_lib_dir=
             \\kernel32_lib_dir=
             \\
-        , .{ root, root, libdir }));
+        , .{ root, root, triple, libdir }));
         const resolver = b.addExecutable(.{
             .name = "nns-resolver",
             .linkage = .dynamic,

@@ -40,6 +40,13 @@ let
 
     set -eo pipefail
 
+    # The launcher starts sessions with the raw inherited environment
+    # (HOME=/ USER=root under su, or unset for apps); session-init's
+    # home-manager PATH and nix.sh both interpolate $HOME while sourcing,
+    # so it must be correct before anything else runs.
+    export HOME="${config.user.home}"
+    export USER="${config.user.userName}"
+
     . "${config.build.sessionInit}/etc/profile.d/nix-on-droid-session-init.sh"
 
     if [ "$#" -gt 0 ]; then
@@ -156,6 +163,16 @@ let
     fi
   '';
 
+  # From NoD's terminal.nix: the generated colors.properties, when the user
+  # configures terminal colors.
+  colorsPath =
+    if config.terminal.colors != { }
+    then "${pkgs.writeTextFile {
+      name = "colors.properties";
+      text = lib.generators.toKeyValue { } config.terminal.colors;
+    }}"
+    else "";
+
 in
 
 {
@@ -183,10 +200,11 @@ in
 
   };
 
-
-  ###### implementation
-
   config = mkIf cfg.enable {
+
+    # Skips the proot-static symlink in the activation package; its
+    # hardcoded store path breaks pure evaluation (see build/linkProotStatic).
+    build.linkProotStatic = false;
 
     environment.sessionVariables.NIX_SSL_CERT_FILE =
       "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
@@ -219,7 +237,7 @@ in
         '';
       });
 
-      activation = mkForce {
+      activation = mkForce ({
         installLogin = ''
           if ! diff ${installDir}/bin/login ${login} > /dev/null; then
             $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/bin
@@ -254,7 +272,42 @@ in
         createDevShm = ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/dev/shm
         '';
-      };
+      } // optionalAttrs (config.terminal.font != null) {
+        # From NoD's terminal.nix. Unlike the stock fontPath hack (which
+        # assumed /nix was the NoD store inside proot), a launcher session
+        # sees the real canonical store, so store fonts resolve directly.
+        linkFont = ''
+          $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
+          if [ -e "${config.user.home}/.termux/font.ttf" ] && ! [ -L "${config.user.home}/.termux/font.ttf" ]; then
+            $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/font.ttf" \
+              "${config.user.home}/.termux/font.ttf.bak"
+          fi
+          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.terminal.font}" \
+            "${config.user.home}/.termux/font.ttf"
+        '';
+      } // optionalAttrs (config.terminal.colors != { }) {
+        linkColors = ''
+          $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
+          if [ -e "${config.user.home}/.termux/colors.properties" ] && ! [ -L "${config.user.home}/.termux/colors.properties" ]; then
+            $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/colors.properties" \
+              "${config.user.home}/.termux/colors.properties.bak"
+          fi
+          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${colorsPath}" \
+            "${config.user.home}/.termux/colors.properties"
+        '';
+      } // (optionalAttrs (config.terminal.font == null) {
+        unlinkFont = ''
+          if [ -e "${config.user.home}/.termux/font.ttf" ] && [ -L "${config.user.home}/.termux/font.ttf" ]; then
+            $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/font.ttf"
+          fi
+        '';
+      }) // (optionalAttrs (config.terminal.colors == { }) {
+        unlinkColors = ''
+          if [ -e "${config.user.home}/.termux/colors.properties" ] && [ -L "${config.user.home}/.termux/colors.properties" ]; then
+            $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/colors.properties"
+          fi
+        '';
+      }));
     };
 
   };

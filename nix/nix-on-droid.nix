@@ -74,7 +74,7 @@ let
     # so no PATH lookups before the launcher takes over.
     /system/bin/mkdir -p "$TMPDIR"
 
-    exec ${cfg.launcher} -- ${loginInner} "$@"
+    exec ${cfg.launcher} --etc ${config.build.installationDir}/etc -- ${loginInner} "$@"
   '';
 
   # setup-etc against the app prefix instead of /etc (which is Android's own
@@ -125,6 +125,7 @@ let
     }
 
     rm $VERBOSE_ARG -f "''${etc}/static"
+    atomic_symlink "''${new_etc}" "''${static}"
 
     for name in $(find "''${new_etc}/" -type l | sed -e "s,^''${new_etc}/,," ); do
         target="''${etc}/''${name}"

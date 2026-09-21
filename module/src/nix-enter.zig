@@ -135,6 +135,7 @@ pub fn main(init: std.process.Init) !u8 {
     const args = init.minimal.args.vector;
     var store: [*:0]const u8 = "/data/nix";
     var tmpdir: []const u8 = init.environ_map.get("TMPDIR") orelse "/tmp";
+    var etcdir: [*:0]const u8 = "";
     var userns = linux.geteuid() != 0;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -144,17 +145,17 @@ pub fn main(init: std.process.Init) !u8 {
             break;
         } else if (std.mem.eql(u8, arg, "--userns")) {
             userns = true;
-        } else if (std.mem.eql(u8, arg, "--store") or std.mem.eql(u8, arg, "--tmpdir")) {
+        } else if (std.mem.eql(u8, arg, "--store") or std.mem.eql(u8, arg, "--tmpdir") or std.mem.eql(u8, arg, "--etc")) {
             i += 1;
             if (i == args.len) return error.MissingOptionValue;
-            if (std.mem.eql(u8, arg, "--store")) store = args[i] else tmpdir = std.mem.span(args[i]);
+            if (std.mem.eql(u8, arg, "--store")) store = args[i] else if (std.mem.eql(u8, arg, "--tmpdir")) tmpdir = std.mem.span(args[i]) else etcdir = args[i];
         } else if (std.mem.eql(u8, arg, "--help")) {
-            std.debug.print("usage: nix-enter [--userns] [--store PATH] [--tmpdir DIR] -- COMMAND [ARG...]\n", .{});
+            std.debug.print("usage: nix-enter [--userns] [--store PATH] [--tmpdir DIR] [--etc DIR] -- COMMAND [ARG...]\n", .{});
             return 0;
         } else break;
     }
     if (i == args.len) return error.CommandRequired;
-    if (store[0] != '/' or tmpdir.len == 0 or tmpdir[0] != '/') return error.AbsolutePathRequired;
+    if (store[0] != '/' or tmpdir.len == 0 or tmpdir[0] != '/' or (etcdir[0] != 0 and etcdir[0] != '/')) return error.AbsolutePathRequired;
 
     // The parent owns only an empty scratch directory, and removes it after
     // the child exits. No mounts are ever made in the parent's namespace.
@@ -204,6 +205,14 @@ pub fn main(init: std.process.Init) !u8 {
     // mounts fails in less-privileged user namespaces because they are locked.
     mount("bind host tree", "/", path(&buf, root, ".nns-host").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
     mount("bind store", store, path(&buf, root, "nix").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
+    // Sessions default to a mirror of the live Android /etc; with --etc the
+    // caller supplies a NoD-style tree instead (passwd/group for getpwuid).
+    // Android's copy stays reachable at /.nns-host/etc either way.
+    if (etcdir[0] != 0) {
+        const dest = path(&buf, root, "etc");
+        _ = checked(linux.mkdirat(-100, dest.ptr, 0o755), "mkdir etc in new root");
+        mount("bind etc", etcdir, dest.ptr, null, linux.MS.BIND, 0);
+    }
     var original = try std.Io.Dir.openDirAbsolute(init.io, "/", .{ .iterate = true });
     var entries = original.iterate();
     var target_buf: [4096]u8 = undefined;
@@ -211,7 +220,8 @@ pub fn main(init: std.process.Init) !u8 {
     var has_tmp = false;
     while (try entries.next(init.io)) |entry| {
         if (std.mem.eql(u8, entry.name, "nix") or
-            std.mem.eql(u8, entry.name, ".nns-host") or std.mem.eql(u8, entry.name, ".nns-detach")) continue;
+            std.mem.eql(u8, entry.name, ".nns-host") or std.mem.eql(u8, entry.name, ".nns-detach") or
+            (etcdir[0] != 0 and std.mem.eql(u8, entry.name, "etc"))) continue;
         if (std.mem.eql(u8, entry.name, "tmp")) has_tmp = true;
         const target = path(&target_buf, ".nns-host", entry.name);
         const dest = path(&buf, root, entry.name);

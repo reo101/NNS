@@ -3,6 +3,12 @@
 # domain; UID and MLS categories remain enforced by app_data_file labels.
 type nns_app
 typeattribute nns_app { appdomain bluetoothdomain coredomain netdomain untrusted_app_all }
+# MLS-trusted subject: the store is labeled s0 while app sessions carry
+# device MLS categories, and mlsconstrain unix_stream_socket connectto
+# demands l1 == l2; daemon-client sockets are the only cross-level
+# connection this domain makes and every access stays gated by the
+# explicit allow rules below.
+typeattribute nns_app mlstrustedsubject
 type nns_exec { file_type exec_type system_file_type }
 allow untrusted_app nns_exec file { getattr open read execute map }
 allow untrusted_app nns_app process { transition siginh rlimitinh }
@@ -17,7 +23,7 @@ type_transition untrusted_app nns_exec process nns_app
 allow nns_app nns_app user_namespace create
 allow nns_app nns_app capability { sys_admin setuid setgid }
 allow nns_app nns_app cap_userns { sys_admin setuid setgid }
-allow nns_app nns_app process { fork sigchld signull signal sigkill getsched }
+allow nns_app nns_app process { fork sigchld signull signal sigkill getsched setpgid }
 # Private-namespace construction: make / private, mount the scratch tmpfs,
 # bind the inherited tree and the store into it, then pivot_root. All of it
 # happens inside the launcher's own mount namespace, which dies with the
@@ -56,6 +62,16 @@ allow nns_app proc_stat file { getattr open read }
 # /proc/self/{uid_map,gid_map} carries the process SID.
 allow nns_app nns_app dir { getattr open read search }
 allow nns_app nns_app file { getattr open read write }
+# Root nix daemon client: the store is root-owned and single-user nix
+# locks the DB for every command, so sessions talk NIX_REMOTE=daemon to
+# the root-run daemon. Socket file lives under the system_file-labeled
+# store; the listening socket's kernel SID is the daemon's ksu/ksu_file
+# type (ksud marks SukiSU sockets ksu_file).
+allow nns_app system_file sock_file { getattr write }
+allow nns_app system_file unix_stream_socket connectto
+allow nns_app ksu unix_stream_socket { connectto getattr getopt read write }
+allow nns_app ksu_file unix_stream_socket { connectto getattr getopt read write }
+allow nns_app nns_app unix_stream_socket { connect create getattr getopt read setopt shutdown write }
 # Scratch directory inside the app's own data dir.
 allow nns_app app_data_file dir { add_name create getattr open read remove_name rename rmdir search setattr write }
 allow nns_app app_data_file file { create getattr open read rename setattr unlink write map }

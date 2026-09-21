@@ -6,7 +6,23 @@ exec > "$LOG" 2>&1
 
 [ -d /data/nix/store ] || exit 0
 find /data/nix/store -xdev -exec chcon -h u:object_r:system_file:s0 {} +
-for path in /data/nix/etc /data/nix/etc/nix /data/nix/etc/profile /data/nix/etc/nix/nix.conf; do
+for path in /data/nix/etc /data/nix/etc/nix /data/nix/etc/profile /data/nix/etc/nix/nix.conf /data/nix/var; do
   [ ! -e "$path" ] || chcon -h u:object_r:system_file:s0 "$path"
 done
-# No /nix mount in init's namespace, no symlink rewriting, no daemon startup.
+
+# Root nix daemon: single-user nix locks the store DB for every command,
+# so unprivileged app sessions (NIX_REMOTE=daemon) talk to this daemon
+# instead of touching the DB directly. It runs inside its own root
+# namespace where /nix is the canonical store, so its patchelf'd binary
+# resolves its interpreter and libraries; the socket it creates is backed
+# by /data/nix/var/nix/daemon-socket/socket, the same file app sessions
+# reach as /nix/var/nix/daemon-socket/socket through their launcher view.
+NIX=/data/nix/var/nix/profiles/profile/bin/nix
+PIDFILE=/data/nix/var/nix/daemon.pid
+if [ -x "$NIX" ]; then
+  if ! [ -f "$PIDFILE" ] || ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    nohup /data/adb/modules/nix/bin/nix-enter -- "$NIX" daemon \
+      >> /data/local/tmp/nix-daemon.log 2>&1 &
+    echo $! > "$PIDFILE"
+  fi
+fi

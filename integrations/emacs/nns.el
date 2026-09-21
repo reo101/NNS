@@ -48,6 +48,9 @@
     (setenv "PATH" (concat (directory-file-name nns-profile) "/bin:"
                           (or (getenv "PATH") "/system/bin")))
     (setenv "NIX_CONF_DIR" (concat (directory-file-name nns-store) "/etc/nix"))
+    ;; The store is root-owned; every single-user nix command locks the
+    ;; DB, so sessions talk to the root daemon instead of the DB directly.
+    (setenv "NIX_REMOTE" "daemon")
     (apply function args)))
 
 (defun nns--call-process (function program &optional infile destination display &rest args)

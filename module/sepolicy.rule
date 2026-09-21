@@ -10,13 +10,15 @@ typeattribute nns_app { appdomain bluetoothdomain coredomain netdomain untrusted
 # explicit allow rules below.
 typeattribute nns_app mlstrustedsubject
 type nns_exec { file_type exec_type system_file_type }
-allow untrusted_app nns_exec file { getattr open read execute map }
-allow untrusted_app nns_app process { transition siginh rlimitinh }
-allow untrusted_app nns_app process2 { nnp_transition nosuid_transition }
-allow untrusted_app nns_app process noatsecure
+# Apps on older targetSdkVersions run in untrusted_app_25/_27/_32, not
+# untrusted_app; the NoD app itself is targetSdk 27.
+allow { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } nns_exec file { getattr open read execute map }
+allow { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } nns_app process { transition siginh rlimitinh }
+allow { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } nns_app process2 { nnp_transition nosuid_transition }
+allow { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } nns_app process noatsecure
 allow nns_app untrusted_app process sigchld
 allow nns_app nns_exec file { entrypoint getattr open read execute map }
-type_transition untrusted_app nns_exec process nns_app
+type_transition { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } nns_exec process nns_app
 # Namespace setup: unshare(CLONE_NEWUSER|CLONE_NEWNS), id maps, mounts.
 # SELinux checks capabilities in non-init user namespaces against the
 # cap_userns class, not capability.
@@ -80,4 +82,4 @@ allow nns_app nns_app { tcp_socket udp_socket } { connect create getattr getopt 
 allow nns_app app_data_file dir { add_name create getattr open read remove_name rename rmdir search setattr write }
 allow nns_app app_data_file file { create getattr open read rename setattr unlink write map }
 # Inherited Emacs/process pipes keep the creator's SID.
-allow nns_app untrusted_app fifo_file { read write open getattr ioctl append }
+allow nns_app { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } fifo_file { read write open getattr ioctl append }

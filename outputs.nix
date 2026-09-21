@@ -4,6 +4,9 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
   {
     systems = import inputs.systems.outPath;
     imports = [ inputs.flake-file.flakeModules.default ];
+    # A Nix-on-Droid module (class `nixOnDroid`) that replaces proot sessions
+    # with the NNS launcher; pass it into `lib.nixOnDroidConfiguration`.
+    flake.nixOnDroidModules.nns = import ./nix/nix-on-droid.nix;
     flake-file = {
       nixConfig = {
         commit-lockfile-summary = "chore(flake): update `flake.lock`";
@@ -67,6 +70,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           module = moduleX86;
         };
         emacs = pkgs.callPackage ./nix/emacs.nix { };
+        nixOnDroidModule = import ./nix/nix-on-droid.nix;
         usernsTest = pkgs.writeShellApplication {
           name = "nns-test-userns";
           runtimeInputs = [ pkgs.python3 ];

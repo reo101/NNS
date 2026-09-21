@@ -139,7 +139,13 @@ Remote/TRAMP processes are left alone.  Disable to run outside NNS."
   (let ((buffer (get-buffer-create "*NNS*")))
     (unless (comint-check-proc buffer)
       (apply #'nns--invoke #'make-comint-in-buffer "NNS" buffer nns-launcher nil
-             (cdr (nns--command (list nns-system-shell "-i")))))
+             (cdr (nns--command
+                   (list nns-system-shell "-c"
+                         ;; Non-interactive Android mksh: interactive mode
+                         ;; needs a pty the namespace child does not have,
+                         ;; and hangs after echoing commands. comint itself
+                         ;; provides the prompt/history layer.
+                         "exec /nix/var/nix/profiles/profile/bin/bash -i")))))
     (pop-to-buffer buffer)))
 
 (provide 'nns)

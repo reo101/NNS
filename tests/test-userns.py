@@ -31,12 +31,12 @@ class NamespaceTest(unittest.TestCase):
                          'parent mount namespace changed')
         self.temp.cleanup()
 
-    def run_code(self, code, *args, explicit=True, store=None):
+    def run_code(self, code, *args, explicit=True, store=None, env=None):
         result = subprocess.run([
             HELPER, *(['--userns'] if explicit else []),
             '--store', str(store or self.store), '--tmpdir', str(self.base),
             '--', sys.executable, '-c', code, *args,
-        ], cwd=self.cwd, text=True, capture_output=True, timeout=20)
+        ], cwd=self.cwd, text=True, capture_output=True, timeout=20, env=env)
         return result
 
     def test_identity_cwd_canonical_path_and_caps(self):
@@ -70,6 +70,29 @@ print(json.dumps([os.getuid(), os.getgid(), os.getcwd(),
         self.assertEqual(r.stdout.strip(), "['has spaces', '']")
         r = self.run_code('import os,signal; os.kill(os.getpid(), signal.SIGTERM)')
         self.assertEqual(r.returncode, 128 + signal.SIGTERM, r.stderr)
+
+    def test_dns_preload_environment(self):
+        bridge = str(self.store / 'lib/libnns-dns.so')
+        env = dict(os.environ, LD_PRELOAD='/no/such/preload.so', NNS_TEST_ENV='preserved')
+        code = 'import os,json; print(json.dumps([os.environ["LD_PRELOAD"], os.environ["NNS_TEST_ENV"]]))'
+        r = self.run_code(code, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), ['/no/such/preload.so', 'preserved'])
+        (self.store / 'lib').mkdir()
+        # The loader ignores this empty test DSO; we only test launcher env
+        # construction here. The real DSO is covered by test-dns.py.
+        (self.store / 'lib/libnns-dns.so').touch()
+        r = self.run_code(code, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), [bridge + ':/no/such/preload.so', 'preserved'])
+        env['LD_PRELOAD'] = bridge
+        r = self.run_code(code, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), [bridge, 'preserved'])
+        del env['LD_PRELOAD']
+        r = self.run_code(code, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), [bridge, 'preserved'])
 
     def test_setup_failure_is_clean(self):
         r = self.run_code('raise Exception("must not execute")', store=self.base / 'absent')

@@ -28,7 +28,16 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         hostLauncher = launcher.override {
           target = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl";
         };
-        module = pkgs.callPackage ./nix/module.nix { inherit launcher; };
+        androidPkgs = import inputs.nixpkgs {
+          localSystem = system;
+          crossSystem = lib.systems.examples.aarch64-android-prebuilt;
+          # Google's prebuilt NDK and its SDK packaging are marked unfree.
+          config.allowUnfree = true;
+        };
+        dns = pkgs.callPackage ./nix/dns.nix {
+          androidToolchain = androidPkgs.stdenv.cc.cc;
+        };
+        module = pkgs.callPackage ./nix/module.nix { inherit launcher dns; };
         emacs = pkgs.callPackage ./nix/emacs.nix { };
         usernsTest = pkgs.writeShellApplication {
           name = "nns-test-userns";
@@ -69,6 +78,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           nns-module = module;
           sukisu-manager = sources.sukisuManager;
           nix-enter = launcher;
+          nns-dns = dns;
           emacs-integration = emacs;
           repack-boot = repacker;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
@@ -82,6 +92,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           default = bundle;
         };
         checks = {
+          nns-dns = dns;
           nns-module = module;
           emacs-integration = emacs;
           repack-boot = pkgs.runCommand "check-repack-boot" {

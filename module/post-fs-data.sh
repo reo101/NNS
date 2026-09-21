@@ -30,6 +30,21 @@ chcon u:object_r:system_file:s0 /data/nix /data/nix/bin || exit 1
 chcon u:object_r:nns_exec:s0 /data/nix/bin/nix-enter.new || exit 1
 mv -f /data/nix/bin/nix-enter.new /data/nix/bin/nix-enter
 
+# Public, non-setuid resolver artifacts. Publish atomically so running sessions
+# never map a partially copied library. No Android /etc files are replaced.
+mkdir -p /data/nix/lib
+chown 0:0 /data/nix/lib
+chmod 755 /data/nix/lib
+chcon u:object_r:system_file:s0 /data/nix/lib || exit 1
+for artifact in bin/nns-resolver lib/libnns-dns.so; do
+  rm -f "/data/nix/$artifact.new"
+  cp "$MODDIR/$artifact" "/data/nix/$artifact.new" || exit 1
+  chmod 755 "/data/nix/$artifact.new"
+  chown 0:0 "/data/nix/$artifact.new"
+  chcon u:object_r:system_file:s0 "/data/nix/$artifact.new" || exit 1
+  mv -f "/data/nix/$artifact.new" "/data/nix/$artifact"
+done
+
 # This kernel exposes an exec-time seccomp bypass allowlist; register the
 # launcher so app-domain sessions can shed the zygote seccomp filter. On
 # kernels without the sysctl this is a no-op (the launcher is limited to

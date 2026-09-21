@@ -85,10 +85,38 @@ fn checked2(rc: usize, op: []const u8) usize {
     return rc;
 }
 
-fn exec(init: std.process.Init, args: []const [*:0]const u8) noreturn {
+fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u8) noreturn {
     const argv = init.gpa.allocSentinel(?[*:0]const u8, args.len, null) catch @panic("out of memory");
     for (args, 0..) |arg, i| argv[i] = arg;
-    const env: [*:null]const ?[*:0]const u8 = @ptrCast(init.minimal.environ.block.view().slice.ptr);
+    var env: [*:null]const ?[*:0]const u8 = @ptrCast(init.minimal.environ.block.view().slice.ptr);
+    // Bionic's linker namespace permits /data, not /nix. Use the physical
+    // backing path; the libc-neutral bridge passes Bionic calls through.
+    var bridge_buf: [4096]u8 = undefined;
+    const bridge = path(&bridge_buf, std.mem.span(store), "lib/libnns-dns.so");
+    const fd = linux.openat(-100, bridge.ptr, .{ .ACCMODE = .RDONLY }, 0);
+    if (@as(isize, @bitCast(fd)) >= 0) {
+        _ = linux.close(@intCast(fd));
+        const previous = init.environ_map.get("LD_PRELOAD") orelse "";
+        var tokens = std.mem.tokenizeAny(u8, previous, " :");
+        var present = false;
+        while (tokens.next()) |token| {
+            if (std.mem.eql(u8, token, bridge)) present = true;
+        }
+        if (!present) {
+            const entry = std.fmt.allocPrintSentinel(init.gpa, "LD_PRELOAD={s}{s}{s}",
+                .{ bridge, if (previous.len == 0) "" else ":", previous }, 0) catch @panic("out of memory");
+            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 1, null) catch @panic("out of memory");
+            var count: usize = 0;
+            for (std.mem.span(env)) |item| {
+                if (std.mem.startsWith(u8, std.mem.span(item.?), "LD_PRELOAD=")) continue;
+                entries[count] = item;
+                count += 1;
+            }
+            entries[count] = entry.ptr;
+            entries[count + 1] = null;
+            env = entries.ptr;
+        }
+    }
     if (std.mem.indexOfScalar(u8, std.mem.span(args[0]), '/') == null) {
         var dirs = std.mem.splitScalar(u8, init.environ_map.get("PATH") orelse "/system/bin:/bin:/usr/bin", ':');
         var buf: [4096]u8 = undefined;
@@ -203,5 +231,5 @@ pub fn main(init: std.process.Init) !u8 {
     _ = checked(linux.umount2("/.nns-detach", 2), "detach original root");
     _ = checked(linux.unlinkat(-100, "/.nns-detach", 0x200), "remove old root mountpoint");
     _ = checked(linux.chdir(@ptrCast(&cwd)), "restore working directory");
-    exec(init, args[i..]);
+    exec(init, args[i..], store);
 }

@@ -17,6 +17,11 @@ mkdir -p /data/nix/store /data/nix/var /data/nix/tmp /data/nix/bin
 mkdir -p /data/nix/etc/nix /data/nix/etc/profile.d /data/nix/home /data/nix/var/nix/profiles
 chmod 755 /data/nix /data/nix/store /data/nix/var
 chmod 1777 /data/nix/tmp
+# init recreates /tmp (shell:shell 0771) at every boot; sessions run as
+# the app uid and need a standard sticky temp dir there (deploy-rs's
+# activation watcher, scp, ...). post-fs-data runs after init, so this
+# lands every boot.
+chmod 1777 /tmp
 
 # /data/adb is deliberately inaccessible to apps. Publish only the static,
 # non-setuid launcher; callers retain their UID and enter the nns_app domain

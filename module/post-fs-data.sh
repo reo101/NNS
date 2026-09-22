@@ -15,6 +15,9 @@ set -x
 
 mkdir -p /data/nix/store /data/nix/var /data/nix/tmp /data/nix/bin
 mkdir -p /data/nix/etc/nix /data/nix/etc/profile.d /data/nix/home /data/nix/var/nix/profiles
+# Boot is a hard reset for the daemon pidfile: nothing alive survived, and
+# a recycled pid fooled the service.sh gate once (landed on Bitwarden).
+rm -f /data/nix/var/nix/daemon.pid
 chmod 755 /data/nix /data/nix/store /data/nix/var
 chmod 1777 /data/nix/tmp
 # init recreates /tmp (shell:shell 0771) at every boot; sessions run as
@@ -31,7 +34,12 @@ chmod 755 /data/nix/bin
 rm -f /data/nix/bin/nix-enter.new
 cp "$MODDIR/bin/nix-enter" /data/nix/bin/nix-enter.new || exit 1
 chmod 755 /data/nix/bin/nix-enter.new
-chcon u:object_r:system_file:s0 /data/nix /data/nix/bin || exit 1
+# system_data_file, not system_file: that is what file_contexts maps for
+# all of /data, and mismatching it made init's boot restorecon -R /data
+# burn 332 seconds in per-path denial+printk loops over the store.
+# nix-enter keeps nns_exec - init cannot relabel it (relabelfrom denied),
+# which is precisely what preserves the app -> nns_app transition.
+chcon u:object_r:system_data_file:s0 /data/nix /data/nix/bin || exit 1
 chcon u:object_r:nns_exec:s0 /data/nix/bin/nix-enter.new || exit 1
 mv -f /data/nix/bin/nix-enter.new /data/nix/bin/nix-enter
 
@@ -40,13 +48,13 @@ mv -f /data/nix/bin/nix-enter.new /data/nix/bin/nix-enter
 mkdir -p /data/nix/lib
 chown 0:0 /data/nix/lib
 chmod 755 /data/nix/lib
-chcon u:object_r:system_file:s0 /data/nix/lib || exit 1
+chcon u:object_r:system_data_file:s0 /data/nix/lib || exit 1
 for artifact in bin/nns-resolver lib/libnns-dns.so; do
   rm -f "/data/nix/$artifact.new"
   cp "$MODDIR/$artifact" "/data/nix/$artifact.new" || exit 1
   chmod 755 "/data/nix/$artifact.new"
   chown 0:0 "/data/nix/$artifact.new"
-  chcon u:object_r:system_file:s0 "/data/nix/$artifact.new" || exit 1
+  chcon u:object_r:system_data_file:s0 "/data/nix/$artifact.new" || exit 1
   mv -f "/data/nix/$artifact.new" "/data/nix/$artifact"
 done
 

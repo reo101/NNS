@@ -72,6 +72,19 @@ allow nns_app rootfs lnk_file { getattr read }
 allow nns_app system_file dir { open read getattr search }
 allow nns_app system_file file { getattr open read map execute execute_no_trans }
 allow nns_app system_file lnk_file { getattr read }
+# file_contexts maps all of /data/nix to system_data_file (generic /data
+# rule). The ROM's init runs `restorecon --recursive --skip-ce /data` at
+# post-fs-data; with system_file labels every store path cost a denial +
+# printk + audit record and the walk took 332s at 25k paths. Labels now
+# match file_contexts, so init's walk skips - and these mirror the
+# system_file grants above so sessions keep exec'ing store binaries,
+# talking to the daemon socket (inherits its dir's label), and writing
+# the profile chain (DAC still gates: only app-owned dirs pass).
+allow nns_app system_data_file dir { open read getattr search add_name remove_name write create rmdir setattr }
+allow nns_app system_data_file file { getattr open read map execute execute_no_trans create rename unlink write append lock setattr ioctl execmem }
+allow nns_app system_data_file lnk_file { getattr read }
+allow nns_app system_data_file sock_file { getattr write }
+allow nns_app system_data_file unix_stream_socket connectto
 allow nns_app shell_exec file { getattr open read map execute execute_no_trans }
 allow nns_app toolbox_exec file { getattr open read map execute execute_no_trans }
 allow nns_app system_linker_exec file { getattr open read map execute execute_no_trans }

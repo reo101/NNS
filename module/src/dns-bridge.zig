@@ -1,5 +1,6 @@
 // No DT_NEEDED libc: this preload travels through both glibc and Bionic
-// children. Only glibc calls are bridged; Bionic calls pass through unchanged.
+// children. Only glibc-facing calls are bridged (getaddrinfo, plus a
+// TCGETS2/TCSETS2 ioctl translation); Bionic calls pass through unchanged.
 const std = @import("std");
 const linux = std.os.linux;
 const wire = @import("dns-wire.zig");
@@ -19,7 +20,30 @@ const AddrInfo = extern struct {
     next: ?*AddrInfo = null,
 };
 const GetAddrInfo = *const fn (?[*:0]const u8, ?[*:0]const u8, ?*const AddrInfo, *?*AddrInfo) callconv(.c) c_int;
+const Ioctl = *const fn (i32, u64, ?*anyopaque) callconv(.c) c_int;
 const Errno = *const fn () callconv(.c) *c_int;
+
+pub export fn ioctl(fd: c_int, request: u64, arg: ?*anyopaque) c_int {
+    // TCGETS2 (0x542a) / TCSETS2 (0x542b) carry the platform's ioctl xperm
+    // whitelist, which lists only the legacy codes for this domain - and
+    // ksud cannot load xperm rules (parsed, echoed, never applied). glibc >=
+    // 2.42 probes TCGETS2 first and treats anything but ENOTTY as fatal, so
+    // a permission failure is retried as the legacy code on the same buffer
+    // (the kernel writes the identical 36-byte prefix; only the trailing
+    // speed fields stay stale, which no tool here reads). If even the legacy
+    // code is refused, the target is not a tty - binaries and plain files -
+    // and ENOTTY is the truthful answer for callers to fall back on.
+    const native: Ioctl = @ptrCast(@alignCast(dlsym(next, "ioctl") orelse return -1));
+    const rc = native(fd, request, arg);
+    if (rc >= 0 or (request != 0x542A and request != 0x542B)) return rc;
+    const errno_fn: Errno = @ptrCast(@alignCast(dlsym(next, "__errno_location") orelse return rc));
+    const err = errno_fn().*;
+    if (err != 13 and err != 1) return rc; // EACCES / EPERM only
+    const retry = native(fd, if (request == 0x542A) 0x5401 else 0x5402, arg);
+    if (retry >= 0) return 0;
+    if (errno_fn().* == 13 or errno_fn().* == 1) errno_fn().* = 25; // ENOTTY
+    return -1;
+}
 
 pub export fn getaddrinfo(node: ?[*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInfo, result: *?*AddrInfo) c_int {
     // Never interpret a Bionic addrinfo as a glibc one. Same call ABI, different

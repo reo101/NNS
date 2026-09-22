@@ -92,8 +92,8 @@ fi
 # the unlock markers (root-only), /data/ve is sshd's privsep chroot (contents
 # are provisioned from staged NSS in service.sh, after stage-etc runs).
 mkdir -p /data/nix/var/nns/services /data/nix/var/nns/ready \
-  /data/nix/var/sshd /data/ve/etc
-chown 10578:10578 /data/nix/var/nns/services /data/nix/var/sshd
+  /data/nix/var/nns/bin /data/nix/var/sshd /data/ve/etc
+chown 10578:10578 /data/nix/var/nns/services /data/nix/var/nns/bin /data/nix/var/sshd
 chcon u:object_r:app_data_file:s0:c66,c258,c512,c768 /data/nix/var/nns/services
 chcon u:object_r:system_data_file:s0 /data/nix/var/sshd
 chmod 755 /data/ve /data/ve/etc

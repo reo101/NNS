@@ -324,7 +324,15 @@ let
         off="$(${pkgs.gnugrep}/bin/grep -abo /var/empty "$hostsrc" | ${pkgs.coreutils}/bin/head -n 1 | ${pkgs.coreutils}/bin/cut -d: -f 1 || true)"
         if [ -n "$off" ]; then
           tmp="${sshdStateDir}/bin/$b-ve.tmp"
+          # A prior failed run leaves a555 copy behind (cp inherits the
+          # store mode) that this uid can no longer open for write - clear
+          # it first; failures must be self-cleaning.
+          $DRY_RUN_CMD rm -f "$tmp"
           $DRY_RUN_CMD ${pkgs.coreutils}/bin/cp "$hostsrc" "$tmp"
+          # cp inherits the store's555 mode; without u+w, dd (running as
+          # the activation uid, not root) cannot open its own copy for
+          # write - EACCES that root test runs never showed.
+          $DRY_RUN_CMD ${pkgs.coreutils}/bin/chmod u+w "$tmp"
           printf '/data/ve\0\0' | $DRY_RUN_CMD ${pkgs.coreutils}/bin/dd of="$tmp" bs=1 seek="$off" conv=notrunc
           # A silently unpatched copy would bind-mount over the store and
           # fail at every connection (chroot /var/empty); assert loudly.

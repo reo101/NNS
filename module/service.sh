@@ -55,3 +55,34 @@ if [ -L "$PROFILE" ] || [ -d "$PROFILE" ]; then
     echo $! > "$PIDFILE"
   fi
 fi
+
+# sshd privsep chroot contents: passwd/group fresh from the staged NSS tree
+# (stage-etc ran above); /data/ve itself was created at post-fs-data.
+if [ -f /data/nix/var/daemon-etc/passwd ]; then
+  cp -f /data/nix/var/daemon-etc/passwd /data/nix/var/daemon-etc/group /data/ve/etc/ || true
+  chmod 755 /data/ve /data/ve/etc
+  chmod 644 /data/ve/etc/* 2>/dev/null || true
+fi
+
+# nns.services: runsvdir over the activation-materialized service dirs,
+# inside a launcher namespace so run scripts see /nix. Same pidfile
+# discipline as the daemon: stale or recycled pids must not gate it.
+SVC=/data/nix/var/nns/services
+if [ -d "$SVC" ] && [ -n "$(ls -A "$SVC")" ]; then
+  RPIDFILE=/data/nix/var/nns/runsvdir.pid
+  if [ -f "$RPIDFILE" ]; then
+    rp=$(cat "$RPIDFILE" 2>/dev/null || true)
+    case "$(tr '\0' ' ' < "/proc/$rp/cmdline" 2>/dev/null || true)" in
+      *runsvdir*) ;;
+      *) rm -f "$RPIDFILE" ;;
+    esac
+  fi
+  if ! [ -f "$RPIDFILE" ] || ! kill -0 "$(cat "$RPIDFILE")" 2>/dev/null; then
+    nohup env HOME=/data/nix/home TMPDIR=/data/nix/tmp \
+      PATH=/data/nix/var/nns/bin:/system/bin:/system/xbin \
+      /data/adb/modules/nix/bin/nix-enter --etc /data/nix/var/daemon-etc -- \
+      /data/nix/var/nns/bin/runsvdir "$SVC" \
+      >> /data/local/tmp/nix-service.log 2>&1 &
+    echo $! > "$RPIDFILE"
+  fi
+fi

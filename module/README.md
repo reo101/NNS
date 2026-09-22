@@ -6,8 +6,15 @@ persistent f2fs, visible to anything launched through the `nix-enter` helper.
 
 ## Status
 
-Working on: Pixel 7 Pro (cheetah), EvolutionX 16 (Android 16), kernel 6.1.145,
-SukiSU Ultra (ksud 4.1.3, script-only module handling).
+Working on: Pixel 7 Pro (cheetah), EvolutionX 16 (Android 16), kernel 6.1.134
+(probed from the running device; the NNS-built image has its own story in
+`kernel/README.md`), SukiSU Ultra (ksud 4.2.0-1-g904c60d1, script-only module
+handling).
+
+Current work: proot-free Nix-on-Droid sessions and boot-supervised services —
+see "Sessions and supervised services" below. That layer is **in progress**:
+behavior is verified end-to-end on the phone, documentation and regression
+tests lag behind it.
 
 ```
 su -c '/data/adb/modules/nix/bin/nix-enter <command>'
@@ -70,6 +77,50 @@ SukiSU). Apps that only exec in-process (android emacs) need either the
 shared-uid trick (exec the helper from a paired root-capable app) or a root
 session daemon the app talks to over a socket — v2 territory.
 
+## Sessions and supervised services (in progress)
+
+Proot is gone; three layers sit above the launcher:
+
+- **Nix-on-Droid module** (`nix/nix-on-droid.nix`, exported as
+  `nixOnDroidModules.nns`, wired host-side by rix101's `deploy .#cheetah`):
+  replaces NoD proot sessions with `nix-enter` user-namespace sessions and a
+  root daemon (`NIX_REMOTE=daemon`). `build.linkProotStatic = false` —
+  activation writes the app prefix directly instead of a proot tree.
+- **Staged `/etc`**: `stage-etc.sh` materializes `/data/nix/var/daemon-etc`,
+  the bind-pinned `/etc` seen by daemon and runsvdir sessions. It re-stages
+  in place (directory inodes must not move), resolving passwd/group from
+  credential-encrypted storage when available, else a pre-unlock seed — so
+  sessions spawned before first unlock run the seed shell until a post-unlock
+  re-stage. Extra `name:uid:gid` lines in `/data/nix/etc/nss-trusted` become
+  passwd/group entries plus `nix-trusted` membership (seeded for sshd privsep).
+- **`nns.services`**: declarative runit services — `services.<name>` with
+  `enable/startAt/after/script/env`, plus `services.sshd` with
+  `enable/port/listenAddress/extraConfig` (config rendered from nix). Service
+  dirs and runit tools materialize to `/data/nix/var/nns/{services,bin}`;
+  `service.sh` starts `runsvdir` behind a pidfile+cmdline gate (recycled pids
+  distrusted); `startAt = "unlock"` waits on the `nns-unlock-ready` sentinel
+  via `nns-wait`. Activation deliberately never touches the live runsv (root
+  control sockets vs app-uid activation) — services apply at boot or via a
+  manual `service.sh` run.
+
+sshd is the first service: state in credential-encrypted `/data/nix/var/sshd`
+(config, host keys, pid, logs, authorized_keys; mode 700),
+`SetEnv NIX_REMOTE=daemon` for every session, `StrictModes no` with `/data/nix`
+pinned `0:0` at boot (Android's `771 system:system` ancestry; Termux
+precedent), and patched `sshd`/`sshd-auth` copies whose `/var/empty` became
+`/data/ve` (uncreatable on this ROM), bind-mounted over the store originals
+inside the session namespace — guarded by a fatal assertion, after an earlier
+silent `dd` failure shipped unpatched helpers that only said "Missing
+privilege separation directory".
+
+Status: end-to-end green on device (deploy confirmed, kill + boot tests
+hand-run). Still missing: doc depth, boot-layer regression tests, a durable
+transport story (LAN / adb-forward / WireGuard flap in `meta.nix`), and
+Shizuku running for rish/`su` (they now fail loudly without it). Sepolicy
+rationale lives in the commit log (`jj log`), not next to `sepolicy.rule`;
+ksud's `allowxperm` rules are dropped by its sepolicy parser, so the
+terminal-ioctl workaround rides in `libnns-dns.so` — see `src/DNS.md`.
+
 ## Seeding the store
 
 Store paths are content-addressed and positional — build a closure on a PC
@@ -101,10 +152,17 @@ nix.conf at `/data/nix/etc/nix/nix.conf` (root builds, no nixbld, sandbox off).
 ## Deploy
 
 ```sh
+nix build .#nns-module           # -> result/nns-module.zip (launcher + bridge + scripts)
+# or hack the launcher directly:
 zig build-exe src/nix-enter.zig -target aarch64-linux-musl -O ReleaseSmall -femit-bin=bin/nix-enter
-./deploy.sh    # or push the three files to /data/adb/modules/nix/
+# push module/* to /data/adb/modules/nix/ and re-sync the zip
 adb reboot     # only needed once, for post-fs-data store prep
 ```
 
-Logs: `/data/local/tmp/nix-enter.log`, `/data/local/tmp/nix-post-fs-data.log`.
-Disable: `touch /data/nix/.disable`.
+Host-side full-system deploy (NoD generation + activation): from
+`~/.config/rix101`, `deploy .#cheetah --skip-checks` after
+`nix flake lock --update-input nns` (NNS is a `path:`-pinned input).
+
+Logs: `/data/local/tmp/nix-{enter,post-fs-data,daemon,service}.log`.
+Disable: `touch /data/adb/modules/nix/disable` (KernelSU's native toggle;
+the old `/data/nix/.disable` was never wired to anything).

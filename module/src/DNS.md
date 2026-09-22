@@ -43,6 +43,18 @@ Limits:
 is `/nix/bin/nns-resolver`. Missing or malformed helpers fail closed, with no
 fallback to glibc's resolver.
 
+## Terminal ioctl shim (same library)
+
+`libnns-dns.so` also exports `ioctl`, `isatty`, `tcgetattr` and `tcsetattr`.
+Modern Android issues `TCGETS2`/`TCSETS2` on ptys; this kernel answers those
+with `EACCES`, which sshd and glibc tooling read as "not a terminal". The shim
+retries the legacy `TCGETS`/`TCSETS` struct on that error before giving up;
+`isatty`/`tcgetattr`/`tcsetattr` ride along so their ioctl paths funnel through
+the same translation. It routes through the bridge because ksud's sepolicy
+parser drops `allowxperm` ioctl rules — granting the raw ioctl through policy
+was not an option (one-domain-per-line rules survive ksud; brace-sourced
+`type_transition` lists and `allowxperm` do not).
+
 ABI references:
 - https://github.com/ettom/dnshack (prior art; no source copied)
 - https://github.com/aosp-mirror/platform_bionic/blob/master/libc/include/netdb.h

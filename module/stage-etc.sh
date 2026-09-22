@@ -62,8 +62,12 @@ resolve() {
   fi
 }
 
-rm -rf "$etc"
+# Keep the DIRECTORY inode: sshd sessions and the daemon bind /etc to
+# this path, and rm -rf on the dir itself swaps the inode out from under
+# those mounts (they pin a deleted, emptied dir -> running sshd suddenly
+# has an empty /etc). Wipe children in place; readers re-resolve names.
 mkdir -p "$etc"
+rm -rf "$etc"/* 2>/dev/null || true
 
 for f in "$nod_etc"/*; do
   [ -e "$f" ] || [ -L "$f" ] || continue
@@ -121,7 +125,12 @@ fi
 chown 0:0 "$etc"
 chown -R 0:0 "$etc"/* 2>/dev/null || true
 chmod 755 "$etc"
-chmod 644 "$etc"/* 2>/dev/null || true
+# Files 644, directories 755: a blanket `chmod 644 $etc/*` strips the
+# execute bit from dirs like ssl/, and session-uid nix then dies on its
+# eager CA load (EACCES traversing /etc/ssl/certs). Session uids read
+# this tree; world-readable is the point of staging it.
+find "$etc" -type d -exec chmod 755 {} + 2>/dev/null || true
+find "$etc" -type f -exec chmod 644 {} + 2>/dev/null || true
 # Label per file_contexts (generic /data rule = system_data_file) so the
 # ROM's boot `restorecon --recursive /data` walk matches and skips instead
 # of paying a denial + printk per path.

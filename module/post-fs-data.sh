@@ -69,7 +69,7 @@ fi
 # Nix wants CA certificates; Android ships no /etc/ssl/certs, so point
 # nix.conf at the nss-cacert bundle already inside the store (referenced
 # via /nix, the path visible inside launcher sessions).
-cacert=$(ls /data/nix/store/*-nss-cacert-*/etc/ssl/certs/ca-bundle.crt 2>/dev/null | head -n 1)
+cacert=$(ls /data/nix/store/*cacert*/etc/ssl/certs/ca-bundle.crt /data/nix/store/*cacert*/etc/ssl/certs/ca-certificates.crt 2>/dev/null | head -n 1)
 if [ -n "$cacert" ] && [ -f /data/nix/etc/nix/nix.conf ]; then
   sed -i '/^ssl-cert-file/d' /data/nix/etc/nix/nix.conf
   printf 'ssl-cert-file = /nix/store/%s\n' "${cacert#/data/nix/store/}" >> /data/nix/etc/nix/nix.conf

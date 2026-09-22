@@ -114,6 +114,11 @@ hosting app; point this at another profile for a richer PATH."
       (nns--ns-test file "test -x")
     (funcall function file)))
 
+(defun nns--file-exists-p (function file)
+  (if (nns--nix-file-p file)
+      (nns--ns-test file "test -e")
+    (funcall function file)))
+
 (defun nns--file-regular-p (function file)
   (if (nns--nix-file-p file)
       (nns--ns-test file "test -f")
@@ -171,7 +176,8 @@ Remote/TRAMP processes are left alone.  Disable to run outside NNS."
                   (make-process . nns--make-process)
                   (executable-find . nns--executable-find)
                   (file-executable-p . nns--file-executable-p)
-                  (file-regular-p . nns--file-regular-p)))
+                  (file-regular-p . nns--file-regular-p)
+                  (file-exists-p . nns--file-exists-p)))
     (if nns-mode
         (advice-add (car pair) :around (cdr pair))
       (advice-remove (car pair) (cdr pair))))

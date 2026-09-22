@@ -78,7 +78,8 @@
   (nns-test--configured
    (cl-letf (((symbol-function 'call-process) (lambda (&rest _) 0)))
      (should (nns--file-executable-p (lambda (_) nil) "/nix/profile/bin/nix"))
-     (should (nns--file-regular-p (lambda (_) nil) "/nix/profile/bin/nix")))
+     (should (nns--file-regular-p (lambda (_) nil) "/nix/profile/bin/nix"))
+     (should (nns--file-exists-p (lambda (_) nil) "/nix/profile/bin/nix")))
    (cl-letf (((symbol-function 'call-process) (lambda (&rest _) 1)))
      (should-not (nns--file-executable-p (lambda (_) t) "/nix/missing")))
    (should (nns--file-executable-p (lambda (_) t) "/usr/bin/ls"))

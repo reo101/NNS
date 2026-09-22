@@ -94,5 +94,39 @@ allow nns_app app_data_file dir { add_name create getattr open read remove_name 
 # `append` for O_APPEND log files (sshd -E); `link` for nix's atomic
 # tarball-cache renames.
 allow nns_app app_data_file file { append create getattr link open read rename setattr unlink write map }
+# nvim swap/shada locks and its IPC socket; lock was missing from both
+# file and dir classes.
+allow nns_app app_data_file dir lock
+allow nns_app app_data_file file lock
+allow nns_app nns_app unix_stream_socket { bind accept listen }
+# sshd's sandbox child lowers RLIMIT_FSIZE; the denial audits as a bare
+# EACCES from a dontaudit'd capability check.
+allow nns_app nns_app capability sys_resource
+# LuaJIT (nvim) maps RWX pages; without this it reports a restricted
+# kernel.
+allow nns_app nns_app process execmem
+# Base ioctl allow so termios probes on non-tty files (scripts,
+# binaries) return ENOTTY as intended instead of EACCES; WHICH ioctls
+# then pass is limited by the xperm table below.
+allow nns_app system_file file ioctl
+# glibc >= 2.42 uses TCGETS2/TCSETS2 (0x542a/0x542b) for tcgetattr /
+# tcsetattr; the platform devpts whitelist carries only the legacy
+# TC* set, so isatty() failed and btop/nvim reported "no tty" while
+# zsh (direct fd reads) kept working. One xperm value per line: the
+# ksud parser takes exactly one.
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5401
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5402
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5403
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5404
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x540f
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5410
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5413
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x5414
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x542a
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x542b
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x542c
+allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x542d
+allowxperm nns_app system_file file ioctl 0x5401
+allowxperm nns_app system_file file ioctl 0x542a
 # Inherited Emacs/process pipes keep the creator's SID.
 allow nns_app { untrusted_app untrusted_app_25 untrusted_app_27 untrusted_app_32 } fifo_file { read write open getattr ioctl append }

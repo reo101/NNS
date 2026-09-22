@@ -1,6 +1,6 @@
 id=nix
 name=Nix Store
-version=3.0.0
-versionCode=3
+version=3.1.0
+versionCode=4
 author=reo101
 description=Native Nix store backed by /data/nix, with per-process canonical /nix namespaces

@@ -9,7 +9,7 @@ arch = sys.argv[2] if len(sys.argv) > 2 else 'arm64'
 machine = {'arm64': 183, 'x64': 62}[arch]
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
-    required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'skip_mount',
+    required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'skip_mount',
                 'sepolicy.rule', 'bin/nix-enter', 'bin/nns-resolver',
                 'lib/libnns-dns.so', 'etc/profile', 'etc/nix/nix.conf'}
     assert names == required, names ^ required
@@ -18,9 +18,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     for name in names:
         assert not Path(name).is_absolute() and '..' not in Path(name).parts
         assert z.getinfo(name).date_time == (1980, 1, 1, 0, 0, 0)
-    for name in ('bin/nix-enter', 'bin/nns-resolver', 'customize.sh', 'post-fs-data.sh', 'service.sh'):
+    for name in ('bin/nix-enter', 'bin/nns-resolver', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh'):
         assert (z.getinfo(name).external_attr >> 16) & stat.S_IXUSR, name
-    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh'):
+    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh'):
         assert z.read(name).startswith(b'#!/system/bin/sh\n')
     elf = z.read('bin/nix-enter')
     assert elf[:6] == b'\x7fELF\x02\x01'

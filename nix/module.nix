@@ -1,7 +1,7 @@
 { lib, stdenvNoCC, launcher, dns, zip, python3, arch ? "arm64" }:
 stdenvNoCC.mkDerivation {
   pname = "nns-module-${arch}";
-  version = "3.0.0";
+  version = "3.1.0";
   src = lib.fileset.toSource {
     root = ../module;
     fileset = lib.fileset.unions [
@@ -9,6 +9,7 @@ stdenvNoCC.mkDerivation {
       ../module/customize.sh
       ../module/post-fs-data.sh
       ../module/service.sh
+      ../module/stage-etc.sh
       ../module/sepolicy.rule
       ../module/etc/profile
       ../module/etc/nix/nix.conf
@@ -24,7 +25,7 @@ stdenvNoCC.mkDerivation {
     cp ${launcher}/bin/nix-enter module/bin/nix-enter
     cp ${dns}/bin/nns-resolver module/bin/nns-resolver
     cp ${dns}/lib/libnns-dns.so module/lib/libnns-dns.so
-    cp module.prop customize.sh post-fs-data.sh service.sh sepolicy.rule module/
+    cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh sepolicy.rule module/
     substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
     cp etc/profile module/etc/
     cp etc/nix/nix.conf module/etc/nix/

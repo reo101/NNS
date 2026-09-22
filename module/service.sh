@@ -7,11 +7,14 @@ exec > "$LOG" 2>&1
 [ -d /data/nix/store ] || exit 0
 find /data/nix/store -xdev -exec chcon -h u:object_r:system_file:s0 {} +
 for path in /data/nix/etc /data/nix/etc/nix /data/nix/etc/profile /data/nix/etc/nix/nix.conf \
-    /data/nix/var /data/nix/var/nix /data/nix/var/nix/profiles; do
+    /data/nix/var /data/nix/var/nix; do
   [ ! -e "$path" ] || chcon -h u:object_r:system_file:s0 "$path"
 done
 # Shared profile links can be dangling until /nix is mounted. Label the links
 # themselves, not their targets, and leave per-user profiles and the DB alone.
+# The profiles DIR stays app-owned/app-labelled (deploy-rs activations write
+# the nix-on-droid generation chain as the app uid); only the links are
+# system_file so every domain can read them.
 find /data/nix/var/nix/profiles -maxdepth 1 -type l \
   -exec chcon -h u:object_r:system_file:s0 {} +
 

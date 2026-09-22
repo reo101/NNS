@@ -21,7 +21,65 @@ const AddrInfo = extern struct {
 };
 const GetAddrInfo = *const fn (?[*:0]const u8, ?[*:0]const u8, ?*const AddrInfo, *?*AddrInfo) callconv(.c) c_int;
 const Ioctl = *const fn (i32, u64, ?*anyopaque) callconv(.c) c_int;
+const RealIsatty = *const fn (c_int) callconv(.c) c_int;
+const RealTcGetattr = *const fn (c_int, ?*anyopaque) callconv(.c) c_int;
+const RealTcSetattr = *const fn (c_int, c_int, ?*anyopaque) callconv(.c) c_int;
 const Errno = *const fn () callconv(.c) *c_int;
+
+fn errnoPtr() ?*c_int {
+    const f: Errno = @ptrCast(@alignCast(dlsym(next, "__errno_location") orelse return null));
+    return f();
+}
+
+// glibc resolves its own termios helpers intra-DSO: isatty's internal
+// ioctl never crosses the preload boundary, so exporting ioctl alone
+// misses every app that calls the wrappers (btop, nvim, ...). The
+// wrappers must be bridged themselves; below, a permission failure on
+// the modern code retries the legacy one the platform whitelist does
+// carry, and a refusal of both is reported as ENOTTY - the truthful
+// answer for binaries and plain files.
+pub export fn isatty(fd: c_int) c_int {
+    const native: RealIsatty = @ptrCast(@alignCast(dlsym(next, "isatty") orelse return 0));
+    if (native(fd) != 0) return 1;
+    const ep = errnoPtr() orelse return 0;
+    if (ep.* != 13 and ep.* != 1) return 0; // genuine ENOTTY etc: not a tty
+    const io: Ioctl = @ptrCast(@alignCast(dlsym(next, "ioctl") orelse return 0));
+    var probe: [64]u8 = undefined; // termios2-sized scratch for the probe
+    if (io(fd, 0x5401, &probe) >= 0) { // TCGETS
+        ep.* = 0;
+        return 1;
+    }
+    ep.* = 25; // ENOTTY
+    return 0;
+}
+
+fn tcRetry(fd: c_int, legacy: u64, arg: ?*anyopaque, restore: ?*anyopaque) c_int {
+    const ep = errnoPtr() orelse return -1;
+    if (ep.* != 13 and ep.* != 1) return -1;
+    const io: Ioctl = @ptrCast(@alignCast(dlsym(next, "ioctl") orelse return -1));
+    if (io(fd, legacy, restore orelse arg) >= 0) {
+        ep.* = 0;
+        return 0;
+    }
+    if (ep.* == 13 or ep.* == 1) ep.* = 25; // ENOTTY
+    return -1;
+}
+
+pub export fn tcgetattr(fd: c_int, out: ?*anyopaque) c_int {
+    const native: RealTcGetattr = @ptrCast(@alignCast(dlsym(next, "tcgetattr") orelse return -1));
+    const rc = native(fd, out);
+    if (rc == 0) return 0;
+    // The legacy TCGETS writes the identical 36-byte prefix of the
+    // termios2 struct; only the trailing speed fields stay stale.
+    return tcRetry(fd, 0x5401, out, out);
+}
+
+pub export fn tcsetattr(fd: c_int, actions: c_int, in: ?*anyopaque) c_int {
+    const native: RealTcSetattr = @ptrCast(@alignCast(dlsym(next, "tcsetattr") orelse return -1));
+    const rc = native(fd, actions, in);
+    if (rc == 0) return 0;
+    return tcRetry(fd, 0x5402, in, in);
+}
 
 pub export fn ioctl(fd: c_int, request: u64, arg: ?*anyopaque) c_int {
     // TCGETS2 (0x542a) / TCSETS2 (0x542b) carry the platform's ioctl xperm

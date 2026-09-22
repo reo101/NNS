@@ -271,7 +271,11 @@ let
     PermitRootLogin no
     PrintMotd no
     PrintLastLog no
-    StrictModes yes
+    # Android's /data is771 system:system by platform design and every
+    # key path lives under it; StrictModes would reject the ancestor on
+    # ownership before ever seeing our state dir. Termux precedent.
+    # The state dir itself keeps700/600 DAC, which is what matters here.
+    StrictModes no
 
     # Non-login ssh commands never source profile.d; without this, nix falls
     # into single-user mode against the root-owned db (big-lock denied).

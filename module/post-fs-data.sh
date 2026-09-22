@@ -19,6 +19,10 @@ mkdir -p /data/nix/etc/nix /data/nix/etc/profile.d /data/nix/home /data/nix/var/
 # a recycled pid fooled the service.sh gate once (landed on Bitwarden).
 rm -f /data/nix/var/nix/daemon.pid
 chmod 755 /data/nix /data/nix/store /data/nix/var
+# Owner too: something in this ROM's early /data pass chowns unknown
+# directories to bluetooth:960, and sshd StrictModes rejects any
+# AuthorizedKeysFile path component not owned by root or the user.
+chown 0:0 /data/nix
 chmod 1777 /data/nix/tmp
 # init recreates /tmp (shell:shell 0771) at every boot; sessions run as
 # the app uid and need a standard sticky temp dir there (deploy-rs's

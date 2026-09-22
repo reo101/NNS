@@ -81,6 +81,10 @@ allow nns_app nns_app { tcp_socket udp_socket } { connect create getattr getopt 
 # sshd and other in-namespace servers need these on the new type too
 # (same compiled-self gap as the client sockets above).
 allow nns_app nns_app tcp_socket { accept bind listen }
+# Port labels: name_bind denials for app sockets are dontaudit'd, so a
+# failed bind surfaces only as EACCES ("Bind to port ... Permission
+# denied") with no avc line at all.
+allow nns_app port_type tcp_socket name_bind
 # Scratch directory inside the app's own data dir.
 allow nns_app app_data_file dir { add_name create getattr open read remove_name rename rmdir search setattr write }
 # `append` for O_APPEND log files (sshd -E); `link` for nix's atomic

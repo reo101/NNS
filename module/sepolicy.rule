@@ -154,6 +154,12 @@ allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x542c
 allowxperm nns_app untrusted_app_all_devpts chr_file ioctl 0x542d
 allowxperm nns_app system_file file ioctl 0x5401
 allowxperm nns_app system_file file ioctl 0x542a
+# sshd's openpty: a pts allocated by an nns_app opener is labeled plain
+# `devpts` (only untrusted_app* openers receive untrusted_app_all_devpts),
+# so the slave open was denied and pty allocation failed. No xperm table
+# exists for this (nns_app -> devpts) pair, so base ioctl covers every
+# tty ioctl there.
+allow nns_app devpts chr_file { getattr ioctl open read write }
 # Inherited Emacs/process pipes keep the creator's SID.
 allow nns_app untrusted_app fifo_file { read write open getattr ioctl append }
 allow nns_app untrusted_app_25 fifo_file { read write open getattr ioctl append }

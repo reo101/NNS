@@ -99,8 +99,13 @@ allow nns_app app_data_file file { append create getattr link open read rename s
 allow nns_app app_data_file dir lock
 allow nns_app app_data_file file lock
 allow nns_app nns_app unix_stream_socket { bind accept listen }
-# sshd's sandbox child lowers RLIMIT_FSIZE; the denial audits as a bare
-# EACCES from a dontaudit'd capability check.
+# sshd's sandbox child lowers RLIMIT_FSIZE. SELinux's task_setrlimit
+# hook checks process { setrlimit } against the target's SID - a
+# dontaudit'd check, so ssh_sandbox_child only ever showed a bare
+# "Permission denied" with no avc line. (sys_resource is the wrong
+# lever - lowering a limit never needs the capability - and stays as
+# harmless belt.)
+allow nns_app nns_app process setrlimit
 allow nns_app nns_app capability sys_resource
 # LuaJIT (nvim) maps RWX pages; without this it reports a restricted
 # kernel.

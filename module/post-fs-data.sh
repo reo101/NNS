@@ -62,6 +62,14 @@ if [ -n "$cacert" ] && [ -f /data/nix/etc/nix/nix.conf ]; then
   printf 'ssl-cert-file = /nix/store/%s\n' "${cacert#/data/nix/store/}" >> /data/nix/etc/nix/nix.conf
 fi
 
+# Trust: apps whose uid maps into the nix-trusted group (resolved through
+# the daemon's staged /etc, see stage-etc.sh) are nix trusted-users.
+if [ -f /data/nix/etc/nix/nix.conf ]; then
+  sed -i '/^trusted-users/d' /data/nix/etc/nix/nix.conf
+  echo 'trusted-users = root @nix-trusted' >> /data/nix/etc/nix/nix.conf
+fi
+[ -f /data/nix/etc/nss-trusted ] || : > /data/nix/etc/nss-trusted
+
 # convenience symlink inside the store dir for on-device poking
 [ -e /data/local/tmp/nix ] || ln -s /data/nix /data/local/tmp/nix
 

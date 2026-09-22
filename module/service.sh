@@ -25,13 +25,16 @@ find /data/nix/var/nix/profiles -maxdepth 1 -type l \
 PROFILE=/data/nix/var/nix/profiles/profile
 NIX=/nix/var/nix/profiles/profile/bin/nix
 PIDFILE=/data/nix/var/nix/daemon.pid
+# The daemon resolves trusted-users (@group) against its OWN /etc, which
+# the staged tree provides with the nix-trusted group; see stage-etc.sh.
+sh /data/adb/modules/nix/stage-etc.sh
 # A canonical profile may be dangling outside the namespace. Resolve its
 # executable only after entering /nix, not with a host-side test -x.
 if [ -L "$PROFILE" ] || [ -d "$PROFILE" ]; then
   if ! [ -f "$PIDFILE" ] || ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
     nohup env TMPDIR=/data/nix/tmp HOME=/data/nix/home \
       NIX_CONF_DIR=/data/nix/etc/nix NIX_REMOTE=local \
-      /data/adb/modules/nix/bin/nix-enter -- "$NIX" daemon \
+      /data/adb/modules/nix/bin/nix-enter --etc /data/nix/var/daemon-etc -- "$NIX" daemon \
       >> /data/local/tmp/nix-daemon.log 2>&1 &
     echo $! > "$PIDFILE"
   fi

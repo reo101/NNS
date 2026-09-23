@@ -47,6 +47,9 @@ allow nns_app nns_app user_namespace create
 allow nns_app nns_app capability { sys_admin setuid setgid }
 allow nns_app nns_app cap_userns { sys_admin setuid setgid }
 allow nns_app nns_app process { fork sigchld signull signal sigkill getsched setpgid }
+# zsh job control asks for setsched; without it every session logs an EPERM
+# miss (getsched alone was already granted).
+allow nns_app nns_app process setsched
 # Private-namespace construction: make / private, mount the scratch tmpfs,
 # bind the inherited tree and the store into it, then pivot_root. All of it
 # happens inside the launcher's own mount namespace, which dies with the
@@ -81,7 +84,14 @@ allow nns_app system_file lnk_file { getattr read }
 # talking to the daemon socket (inherits its dir's label), and writing
 # the profile chain (DAC still gates: only app-owned dirs pass).
 allow nns_app system_data_file dir { open read getattr search add_name remove_name write create rmdir setattr }
-allow nns_app system_data_file file { getattr open read map execute execute_no_trans create rename unlink write append lock setattr ioctl execmem }
+# ksud's apply silently drops statements whose perm list gets long: the
+#15-perm original of the next line, and a14-perm variant, both parsed to
+# nothing (empty echo, rc 0) while <=11-perm lists load fine - which is
+# exactly how every reboot killed app sessions with a bare
+# `nix-enter: exec: errno 13`. Keep each list small.
+allow nns_app system_data_file file { getattr open read map execute execute_no_trans }
+allow nns_app system_data_file file { create rename unlink write append setattr }
+allow nns_app system_data_file file { lock ioctl execmem }
 allow nns_app system_data_file lnk_file { getattr read }
 allow nns_app system_data_file sock_file { getattr write }
 allow nns_app system_data_file unix_stream_socket connectto
@@ -96,6 +106,10 @@ allow nns_app proc dir { getattr open read search }
 allow nns_app proc file { getattr open read map }
 allow nns_app proc lnk_file { read getattr }
 allow nns_app proc_stat file { getattr open read }
+# starship probes cgroups on every prompt; search-only so the prompt works
+# and4 denials per render stop eating the audit rate budget.
+allow nns_app cgroup_v2 dir search
+allow nns_app cgroup dir search
 # /proc/self/{uid_map,gid_map} carries the process SID.
 allow nns_app nns_app dir { getattr open read search }
 allow nns_app nns_app file { getattr open read write }
@@ -109,6 +123,10 @@ allow nns_app system_file unix_stream_socket connectto
 allow nns_app ksu unix_stream_socket { connectto getattr getopt read write }
 allow nns_app ksu_file unix_stream_socket { connectto getattr getopt read write }
 allow nns_app nns_app unix_stream_socket { connect create getattr getopt read setopt shutdown write }
+# `connectto` is a distinct perm from `connect`: without it gpg-agent's own
+# socket (nns_app -> nns_app) denies and every profile gpg-connect-age call
+# retries forever.
+allow nns_app nns_app unix_stream_socket connectto
 # Adding a runtime type to netdomain does not regenerate compiled `self`
 # socket rules. Permit ordinary client sockets explicitly for the new type.
 allow nns_app nns_app { tcp_socket udp_socket } { connect create getattr getopt read setopt shutdown write }
@@ -178,6 +196,12 @@ allowxperm nns_app system_file file ioctl 0x542a
 # exists for this (nns_app -> devpts) pair, so base ioctl covers every
 # tty ioctl there.
 allow nns_app devpts chr_file { getattr ioctl open read write }
+# Non-legacy TC* ioctls (TCGETS2/TCSETS2) on the app's own pty are denied by
+# the platform's devpts xperm whitelist, which our allowxperm lines cannot
+# extend (ksud never loads them). The bridge shim falls back to the legacy
+# struct anyway, so dontaudit the misses: at audit rate5/s they blew the
+# budget and hid real denials (audit_lost=7046).
+dontaudit nns_app untrusted_app_all_devpts chr_file ioctl
 # Inherited Emacs/process pipes keep the creator's SID.
 allow nns_app untrusted_app fifo_file { read write open getattr ioctl append }
 allow nns_app untrusted_app_25 fifo_file { read write open getattr ioctl append }

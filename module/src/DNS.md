@@ -59,3 +59,13 @@ ABI references:
 - https://github.com/ettom/dnshack (prior art; no source copied)
 - https://github.com/aosp-mirror/platform_bionic/blob/master/libc/include/netdb.h
 - https://github.com/bminor/glibc/blob/master/nss/getaddrinfo.c
+
+## Shizuku rish property shim
+
+The NNS user namespace maps the app UID but not host root, so Bionic sees
+Android's root-owned `/dev/__properties__` files as `overflowuid`. Its property
+loader rejects them despite read access. With `NNS_RISH_PROPERTY_INFO_SHIM=1`,
+`libnns-dns.so` reports UID/GID 0 only for `fstat` calls on files directly in
+that directory. SELinux still controls which property areas are readable. The
+rish launcher sets this flag and preloads the library; ordinary processes are
+unchanged.

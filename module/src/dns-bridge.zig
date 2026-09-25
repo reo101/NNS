@@ -1,11 +1,12 @@
 // No DT_NEEDED libc: this preload travels through both glibc and Bionic
 // children. Only glibc-facing calls are bridged (getaddrinfo, plus a
-// TCGETS2/TCSETS2 ioctl translation); Bionic calls pass through unchanged.
+// TCGETS2/TCSETS2 ioctl translation); Bionic mostly passes through unchanged.
 const std = @import("std");
 const linux = std.os.linux;
 const wire = @import("dns-wire.zig");
 extern fn dlsym(?*anyopaque, [*:0]const u8) ?*anyopaque;
 extern fn getenv([*:0]const u8) ?[*:0]const u8;
+extern fn readlink([*:0]const u8, [*]u8, usize) isize;
 extern fn calloc(usize, usize) ?*anyopaque;
 extern fn free(?*anyopaque) void;
 const next: ?*anyopaque = @ptrFromInt(std.math.maxInt(usize)); // RTLD_NEXT, LP64
@@ -24,6 +25,7 @@ const Ioctl = *const fn (i32, u64, ?*anyopaque) callconv(.c) c_int;
 const RealIsatty = *const fn (c_int) callconv(.c) c_int;
 const RealTcGetattr = *const fn (c_int, ?*anyopaque) callconv(.c) c_int;
 const RealTcSetattr = *const fn (c_int, c_int, ?*anyopaque) callconv(.c) c_int;
+const RealFstat = *const fn (c_int, ?*anyopaque) callconv(.c) c_int;
 const Errno = *const fn () callconv(.c) *c_int;
 
 fn errnoPtr() ?*c_int {
@@ -79,6 +81,34 @@ pub export fn tcsetattr(fd: c_int, actions: c_int, in: ?*anyopaque) c_int {
     const rc = native(fd, actions, in);
     if (rc == 0) return 0;
     return tcRetry(fd, 0x5402, in, in);
+}
+
+pub export fn fstat(fd: c_int, buf: ?*anyopaque) c_int {
+    const native: RealFstat = @ptrCast(@alignCast(dlsym(next, "fstat") orelse return -1));
+    const rc = native(fd, buf);
+    if (rc != 0 or buf == null or getenv("NNS_RISH_PROPERTY_INFO_SHIM") == null or
+        dlsym(next, "gnu_get_libc_version") != null) return rc;
+
+    var proc_path: [32]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&proc_path, "/proc/self/fd/{d}", .{fd}) catch return rc;
+    var target: [64]u8 = undefined;
+    const n = readlink(path.ptr, &target, target.len);
+    if (n <= 0) return rc;
+    const name = target[0..@intCast(n)];
+    const property_dir = "/dev/__properties__/";
+    if (!std.mem.startsWith(u8, name, property_dir) or
+        std.mem.indexOfScalar(u8, name[property_dir.len..], '/') != null) return rc;
+
+    // Bionic's 64-bit stat layout: uid/gid are at 24/28 on arm64 and 28/32
+    // on x86_64. The session userns leaves host root unmapped, so Bionic sees
+    // overflowuid and rejects its read-only property metadata and area files.
+    const uid_offset: usize = if (@import("builtin").cpu.arch == .aarch64) 24 else 28;
+    const bytes: [*]u8 = @ptrCast(buf.?);
+    const uid: *align(1) u32 = @ptrCast(bytes + uid_offset);
+    const gid: *align(1) u32 = @ptrCast(bytes + uid_offset + 4);
+    uid.* = 0;
+    gid.* = 0;
+    return rc;
 }
 
 pub export fn ioctl(fd: c_int, request: u64, arg: ?*anyopaque) c_int {

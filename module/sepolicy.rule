@@ -100,6 +100,15 @@ allow nns_app toolbox_exec file { getattr open read map execute execute_no_trans
 allow nns_app system_linker_exec file { getattr open read map execute execute_no_trans }
 allow nns_app system_linker_exec lnk_file { getattr read }
 allow nns_app apex_module_file file { getattr open read map execute execute_no_trans }
+# Rish starts app_process inside the identity-mapped userns. Android's
+# property-area fstat checks and servicemanager readiness use these objects;
+# appdomain's compiled grants did not expand to this runtime-added domain.
+allow nns_app properties_device dir search
+allow nns_app property_info file { getattr open read map }
+allow nns_app properties_serial file { getattr open read map }
+allow nns_app build_prop file { getattr open read map }
+allow nns_app servicemanager_prop file { getattr open read map }
+allow nns_app binder_device chr_file { getattr open read write ioctl map }
 # proc self-inodes (exe, fd, cwd magic links) carry the process's own SID.
 allow nns_app nns_app lnk_file { read getattr create }
 allow nns_app proc dir { getattr open read search }

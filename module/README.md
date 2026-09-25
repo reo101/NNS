@@ -114,10 +114,11 @@ silent `dd` failure shipped unpatched helpers that only said "Missing
 privilege separation directory".
 
 Status: end-to-end green on device (deploy confirmed, kill + boot tests
-hand-run). Still missing: doc depth, boot-layer regression tests, a durable
-transport story (LAN / adb-forward / WireGuard flap in `meta.nix`), and
-Shizuku running for rish/`su` (they now fail loudly without it). Sepolicy
-rationale lives in the commit log (`jj log`), not next to `sepolicy.rule`;
+hand-run). Shizuku's `app_process`/Binder path is now verified on-device; the
+Nix-on-Droid module installs NNS-owned `rish`/`su`/`sudo` wrappers so the stale
+upstream `service list` preflight is bypassed. Still missing: doc depth,
+boot-layer regression tests, and a durable transport story (LAN / adb-forward /
+WireGuard flap in `meta.nix`). Sepolicy rationale lives in the commit log (`jj log`), not next to `sepolicy.rule`;
 ksud's `allowxperm` rules are dropped by its sepolicy parser, so the
 terminal-ioctl workaround rides in `libnns-dns.so` — see `src/DNS.md`.
 

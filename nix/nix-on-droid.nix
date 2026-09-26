@@ -496,10 +496,6 @@ in
 
   config = mkIf cfg.enable {
 
-    # Skips the proot-static symlink in the activation package; its
-    # hardcoded store path breaks pure evaluation (see build/linkProotStatic).
-    build.linkProotStatic = false;
-
     # runsvdir/sv/pause for nns.services; also what nns-wait's `up` mode
     # shells out to (rendered run scripts put the profile bin on PATH).
     environment.packages = optional cfg.services.enable pkgs.runit;

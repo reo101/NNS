@@ -136,6 +136,9 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         checks = {
           nns-dns = dns;
           nns-module = module;
+          nns-modular-services =
+            assert import ./tests/test-modular-services.nix { inherit pkgs; };
+            pkgs.runCommand "check-nns-modular-services" { } "touch $out";
           emacs-integration = emacs;
           repack-boot = pkgs.runCommand "check-repack-boot" {
             nativeBuildInputs = [ pkgs.python3 ];

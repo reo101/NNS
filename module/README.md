@@ -85,7 +85,10 @@ Proot is gone; three layers sit above the launcher:
   `nixOnDroidModules.nns`, wired host-side by rix101's `deploy .#cheetah`):
   replaces NoD proot sessions with `nix-enter` user-namespace sessions and a
   root daemon (`NIX_REMOTE=daemon`). `build.linkProotStatic = false` —
-  activation writes the app prefix directly instead of a proot tree.
+  activation writes the app prefix directly instead of a proot tree. There is
+  no `/android` alias: the old `dnshackresolver` needed proot's `-b /:/android`
+  mapping, but NNS's Bionic DNS helper requests `/system/bin/linker64` from
+  the real Android root. Only the NNS bridge should be preloaded in sessions.
 - **Staged `/etc`**: `stage-etc.sh` materializes `/data/nix/var/daemon-etc`,
   the bind-pinned `/etc` seen by daemon and runsvdir sessions. It re-stages
   in place (directory inodes must not move), resolving passwd/group from
@@ -93,15 +96,31 @@ Proot is gone; three layers sit above the launcher:
   sessions spawned before first unlock run the seed shell until a post-unlock
   re-stage. Extra `name:uid:gid` lines in `/data/nix/etc/nss-trusted` become
   passwd/group entries plus `nix-trusted` membership (seeded for sshd privsep).
-- **`nns.services`**: declarative runit services — `services.<name>` with
-  `enable/startAt/after/script/env`, plus `services.sshd` with
+- **`nns.services`**: modular services backed by runit. Declare
+  `nns.services.services.<name>` with portable `process.argv` and
+  `process.environment`, or import a nixpkgs `_class = "service"` module.
+  `nns.enable`, `nns.startAt` (`boot` or `unlock`), and `nns.after` are
+  backend-only options; portable modules can guard them with `options ? nns`.
+  Shell `script`/`env` definitions are no longer supported. For example:
+
+  ```nix
+  nns.services.services.example = {
+    process.argv = [ "/system/bin/sleep" "3600" ];
+    process.environment.EXAMPLE = "value with spaces";
+    nns.startAt = "unlock";
+  };
+  ```
+
+  The dedicated `services.sshd` still accepts
   `enable/port/listenAddress/extraConfig` (config rendered from nix). Service
   dirs and runit tools materialize to `/data/nix/var/nns/{services,bin}`;
   `service.sh` starts `runsvdir` behind a pidfile+cmdline gate (recycled pids
-  distrusted); `startAt = "unlock"` waits on the `nns-unlock-ready` sentinel
+  distrusted); `nns.startAt = "unlock"` waits on the `nns-unlock-ready` sentinel
   via `nns-wait`. Activation deliberately never touches the live runsv (root
   control sockets vs app-uid activation) — services apply at boot or via a
-  manual `service.sh` run.
+  manual `service.sh` run. Nested services, `configData`, reload and notification
+  protocols are rejected rather than silently ignored. Services must remain
+  in the foreground; NNS does not interpret `systemd.*` options.
 
 sshd is the first service: state in credential-encrypted `/data/nix/var/sshd`
 (config, host keys, pid, logs, authorized_keys; mode 700),

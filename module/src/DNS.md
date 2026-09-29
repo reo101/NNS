@@ -16,8 +16,9 @@ normal `/system/bin/linker64` startup. Tests need Python 3, not the NDK.
 
 `nix-enter` prepends the bridge to `LD_PRELOAD` when it exists under the selected
 backing store's `lib` directory. It uses the physical `/data/...` path because
-Android's system linker namespace disallows `/nix`. Existing preloads are
-preserved. The bridge has no libc
+Android's system linker namespace disallows `/nix`. The launcher preserves
+existing preloads, but the Nix-on-Droid login replaces them with the NNS bridge
+so an inherited `dnshack` cannot override DNS resolution. The bridge has no libc
 DT_NEEDED dependency: Bionic children delegate to their original `getaddrinfo`;
 glibc children exec the helper with the same UID and a clean environment.
 No shell, global environment mutation, DNS-server snapshot, `/etc` replacement,

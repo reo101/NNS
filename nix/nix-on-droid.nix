@@ -27,9 +27,51 @@
 { config, lib, pkgs, ... }:
 
 let
+  inherit (lib) attrNames concatMapStringsSep map mkEnableOption mkForce mkIf mkOption optional toString types;
   cfg = config.nns;
 
   installDir = config.build.installationDir;
+
+  portableServices = import "${pkgs.path}/lib/services/lib.nix" { inherit lib; };
+  # The pinned portable base lacks process.environment; newer revisions may
+  # already declare it, so test the base before adding the compatibility option.
+  portableHasEnvironment = (lib.evalModules {
+    class = "service";
+    modules = [ (import "${pkgs.path}/lib/services/service.nix" { inherit pkgs; }) ];
+  }).options.process ? environment;
+  serviceSubmodule = (portableServices.configure {
+    serviceManagerPkgs = pkgs;
+    extraRootModules = [
+      ({ name, ... }: {
+        options.process = lib.optionalAttrs (!portableHasEnvironment) {
+          environment = mkOption {
+            type = types.lazyAttrsOf (types.nullOr (
+              types.coercedTo (types.either types.path types.package) (value: "${value}") types.str
+            ));
+            default = { };
+            description = "Environment variables for the service process; null unsets a variable.";
+          };
+        };
+        options.nns = {
+          enable = mkOption {
+            type = types.bool;
+            default = true;
+            description = "Whether the ${name} service is supervised.";
+          };
+          startAt = mkOption {
+            type = types.enum [ "boot" "unlock" ];
+            default = "boot";
+            description = "Wait for first unlock before starting this service when set to unlock.";
+          };
+          after = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Wait for these runit services to be running before starting.";
+          };
+        };
+      })
+    ];
+  }).serviceSubmodule;
 
   rishDex = pkgs.runCommand "nns-rish-shizuku.dex" { nativeBuildInputs = [ pkgs.unzip ]; } ''
     unzip -p ${pkgs.fetchurl {
@@ -72,8 +114,9 @@ let
 
     . "${config.build.sessionInit}/etc/profile.d/nix-on-droid-session-init.sh"
 
-    # Keep NoD's DNS preload first; the NNS shim fixes tty detection in nns_app.
-    export LD_PRELOAD="''${LD_PRELOAD:+$LD_PRELOAD:}/data/nix/lib/libnns-dns.so"
+    # NoD's dnshack resolver expects proot's removed /android mapping.
+    # Use the NNS Bionic resolver and terminal shim for every login session.
+    export LD_PRELOAD=/data/nix/lib/libnns-dns.so
 
     mkdir -p "$HOME/.nns-bin"
     ln -sf "${nnsRish}" "$HOME/.nns-bin/rish"
@@ -248,27 +291,30 @@ let
     export PATH=/data/nix/var/nns/bin:/nix/var/nix/profiles/profile/bin:${config.user.home}/.nix-profile/bin:/system/bin:/system/xbin
   '';
 
-  # startAt = "unlock" gates on the provider's marker; after = waits until
+  # nns.startAt = "unlock" gates on the provider's marker; nns.after waits until
   # runsv reports the named services up. The polling loop itself lives only
   # in waitBin (marker mode) and the nns-unlock-ready provider.
   renderWaits =
     svc:
     concatMapStringsSep "\n" (w: "${waitBin} ${w}") (
-      optional (svc.startAt == "unlock") "marker unlock"
-      ++ map (d: "up ${servicesDir}/${d}") svc.after
+      optional (svc.nns.startAt == "unlock") "marker unlock"
+      ++ map (d: "up ${lib.escapeShellArg "${servicesDir}/${d}"}") svc.nns.after
     );
 
   mkRunScript =
     name: svc:
     let
       waits = renderWaits svc;
-      exports = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "export ${k}=${v}") svc.env);
+      exports = lib.concatStringsSep "\n" (lib.mapAttrsToList (key: value:
+        if value == null then "unset ${key}"
+        else "export ${key}=${lib.escapeShellArg value}"
+      ) svc.process.environment);
     in
     pkgs.writeScript "nns-run-${name}" (
       servicePreamble
       + waits + lib.optionalString (waits != "") "\n"
       + exports + lib.optionalString (exports != "") "\n"
-      + svc.script + "\n"
+      + "exec ${lib.escapeShellArgs svc.process.argv}\n"
     );
 
   # Readiness provider for startAt = "unlock": the one and only process that
@@ -415,54 +461,15 @@ in
 
         services = mkOption {
           default = { };
-          type = types.attrsOf (types.submodule (
-            { name, ... }:
-            {
-              options = {
-                enable = mkOption {
-                  type = types.bool;
-                  default = true;
-                  description = "Whether the ${name} service is materialized and supervised.";
-                };
-
-                startAt = mkOption {
-                  type = types.enum [
-                    "boot"
-                    "unlock"
-                  ];
-                  default = "boot";
-                  description = ''
-                    boot: starts with runsvdir at boot. unlock: blocks until
-                    first unlock (CE available) via the auto-provided
-                    nns-unlock-ready provider's marker; use for anything
-                    reading credential-encrypted home.
-                  '';
-                };
-
-                after = mkOption {
-                  type = types.listOf types.str;
-                  default = [ ];
-                  description = "Names of other services to wait for (runsv reports them running) before running.";
-                };
-
-                script = mkOption {
-                  type = types.lines;
-                  description = ''
-                    Shell body run under /system/bin/sh. Must stay in the
-                    foreground: runsv supervises this process, a daemonizing
-                    script triggers a restart storm.
-                  '';
-                };
-
-                env = mkOption {
-                  type = types.attrsOf types.str;
-                  default = { };
-                  description = "Extra environment exports for the service.";
-                };
-              };
-            }
-          ));
-          description = "Declarative runit services, supervised from boot.";
+          type = types.attrsOf serviceSubmodule;
+          description = ''
+            Portable modular services supervised by runit. Use `imports` to
+            reuse nixpkgs service modules and `process.argv` and
+            `process.environment` to configure the process. `nns.startAt`
+            and `nns.after` control NNS-specific boot ordering. `nns.enable`
+            disables a service. Systemd units, nested services, reload commands
+            and configData are not supported.
+          '';
         };
 
         sshd = {
@@ -496,6 +503,33 @@ in
   };
 
   config = mkIf cfg.enable {
+
+    assertions = lib.concatLists (lib.mapAttrsToList (name: service:
+      portableServices.getAssertions [ "nns" "services" "services" name ] service ++ [
+        {
+          assertion = builtins.match "[A-Za-z0-9_-]+" name != null
+            && name != "sshd" && name != "nns-unlock-ready";
+          message = "nns.services.services.${name}: invalid or reserved runit service name";
+        }
+        {
+          assertion = lib.all (key: builtins.match "[A-Za-z_][A-Za-z0-9_]*" key != null)
+            (attrNames service.process.environment);
+          message = "nns.services.services.${name}: invalid environment variable name";
+        }
+        {
+          assertion = !service.nns.enable || service.process.argv != [ ];
+          message = "nns.services.services.${name}: process.argv must name an executable";
+        }
+        {
+          assertion = service.configData == { } && service.services == { }
+            && service.process.reloadCommand == null
+            && !service.notificationProtocol.systemd && !service.notificationProtocol.s6;
+          message = "nns.services.services.${name}: configData, nested services, reload and notification protocols are not supported by NNS runit";
+        }
+      ]) cfg.services.services);
+    warnings = lib.concatLists (lib.mapAttrsToList (name: service:
+      portableServices.getWarnings [ "nns" "services" "services" name ] service
+    ) cfg.services.services);
 
     # runsvdir/sv/pause for nns.services; also what nns-wait's `up` mode
     # shells out to (rendered run scripts put the profile bin on PATH).
@@ -635,13 +669,13 @@ in
             let
               svc = cfg.services.services.${name};
             in
-            lib.optionalString svc.enable /* bash */ ''
+            lib.optionalString svc.nns.enable /* bash */ ''
               $DRY_RUN_CMD mkdir -p ${servicesDir}/${name}
               $DRY_RUN_CMD ln -sfn ${mkRunScript name svc} ${servicesDir}/${name}/run
             '')
             (attrNames cfg.services.services)}
           ${lib.concatMapStrings (name:
-            lib.optionalString (! cfg.services.services.${name}.enable) /* bash */ ''
+            lib.optionalString (! cfg.services.services.${name}.nns.enable) /* bash */ ''
               $DRY_RUN_CMD rm -rf ${servicesDir}/${name}
             '')
             (attrNames cfg.services.services)}

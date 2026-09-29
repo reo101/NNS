@@ -40,7 +40,9 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         dns = pkgs.callPackage ./nix/dns.nix {
           androidToolchain = androidPkgs.stdenv.cc.cc;
         };
-        module = pkgs.callPackage ./nix/module.nix { inherit launcher dns; };
+        policy = pkgs.callPackage ./nix/sepolicy.nix { };
+        policyCandidates = pkgs.callPackage ./nix/sepolicy-candidates.nix { };
+        module = pkgs.callPackage ./nix/module.nix { inherit launcher dns policy; };
         androidTestPkgs = import inputs.nixpkgs {
           inherit system;
           config = { allowUnfree = true; android_sdk.accept_license = true; };
@@ -108,6 +110,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
       {
         packages = {
           nns-module = module;
+          nns-sepolicy = policy;
+          nns-sepolicy-candidates = policyCandidates;
           sukisu-manager = sources.sukisuManager;
           nix-enter = launcher;
           nns-dns = dns;

@@ -13,19 +13,16 @@ stdenvNoCC.mkDerivation {
     ];
   };
   nativeBuildInputs = [ zig python3 ];
-  dontConfigure = true;
+  dontBuild = true; # The Zig install phase builds both artifacts.
   dontFixup = true; # Preserve /system/bin/linker64 and the libc-neutral preload.
   allowedReferences = [ ];
-  buildPhase = ''
-    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-    zig build -Doptimize=ReleaseSmall -Darch=${arch} \
-      -Dandroid-sysroot=${androidToolchain}/toolchain/sysroot --prefix "$out"
-  '';
+  dontSetZigDefaultFlags = true; # The hook's host CPU and optimization flags do not apply.
+  zigBuildFlags = [
+    "-Doptimize=ReleaseSmall"
+    "-Darch=${arch}"
+    "-Dandroid-sysroot=${androidToolchain}/toolchain/sysroot"
+  ];
   doCheck = true;
-  checkPhase = ''
-    zig build test
-  '';
-  dontInstall = true; # zig build installs both artifacts into the prefix.
   meta = {
     description = "Zig getaddrinfo bridge to Android's Bionic resolver";
     platforms = lib.platforms.linux;

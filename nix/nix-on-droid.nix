@@ -26,8 +26,6 @@
 
 { config, lib, pkgs, ... }:
 
-with lib;
-
 let
   cfg = config.nns;
 
@@ -73,6 +71,9 @@ let
     export USER="${config.user.userName}"
 
     . "${config.build.sessionInit}/etc/profile.d/nix-on-droid-session-init.sh"
+
+    # Keep NoD's DNS preload first; the NNS shim fixes tty detection in nns_app.
+    export LD_PRELOAD="''${LD_PRELOAD:+$LD_PRELOAD:}/data/nix/lib/libnns-dns.so"
 
     mkdir -p "$HOME/.nns-bin"
     ln -sf "${nnsRish}" "$HOME/.nns-bin/rish"
@@ -261,7 +262,7 @@ let
     name: svc:
     let
       waits = renderWaits svc;
-      exports = concatStringsSep "\n" (mapAttrsToList (k: v: "export ${k}=${v}") svc.env);
+      exports = lib.concatStringsSep "\n" (lib.mapAttrsToList (k: v: "export ${k}=${v}") svc.env);
     in
     pkgs.writeScript "nns-run-${name}" (
       servicePreamble
@@ -309,7 +310,7 @@ let
 
     # Non-login ssh commands never source profile.d; without this, nix falls
     # into single-user mode against the root-owned db (big-lock denied).
-    SetEnv NIX_REMOTE=daemon
+    SetEnv "NIX_REMOTE=daemon"
 
     ${sshdCfg.extraConfig}
   '';
@@ -395,7 +396,7 @@ in
       launcher = mkOption {
         type = types.str;
         default = "/data/nix/bin/nix-enter";
-        description = /* bash */ ''
+        description = ''
           Path to the static NNS launcher, visible to the app on the host
           filesystem (outside the store namespace).
         '';
@@ -498,7 +499,7 @@ in
 
     # runsvdir/sv/pause for nns.services; also what nns-wait's `up` mode
     # shells out to (rendered run scripts put the profile bin on PATH).
-    environment.packages = optional cfg.services.enable pkgs.runit;
+    environment.packages = lib.optional cfg.services.enable pkgs.runit;
 
     environment.sessionVariables.NIX_SSL_CERT_FILE =
       "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
@@ -523,7 +524,7 @@ in
           $DRY_RUN_CMD ln $VERBOSE_ARG --symbolic --force ${config.environment.usrBinEnv} ${installDir}/usr/bin/.env.tmp
           $DRY_RUN_CMD mv $VERBOSE_ARG ${installDir}/usr/bin/.env.tmp ${installDir}/usr/bin/env
         '';
-      } // optionalAttrs (config.home-manager.config != null && config.home-manager.useUserPackages) {
+      } // lib.optionalAttrs (config.home-manager.config != null && config.home-manager.useUserPackages) {
         setPriorityHomeManagerPath = /* bash */ ''
           if nix-env -q | grep '^home-manager-path$'; then
             $DRY_RUN_CMD nix-env $VERBOSE_ARG --set-flag priority 120 home-manager-path
@@ -566,20 +567,30 @@ in
         createDevShm = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/dev/shm
         '';
-      } // optionalAttrs (config.terminal.font != null) {
-        # From NoD's terminal.nix. Unlike the stock fontPath hack (which
-        # assumed /nix was the NoD store inside proot), a launcher session
-        # sees the real canonical store, so store fonts resolve directly.
+      } // lib.optionalAttrs (config.terminal.font != null) {
+        # The Android terminal UI runs outside the launcher's mount namespace,
+        # so its font symlink must resolve within app-owned storage, not /nix.
         linkFont = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
           if [ -e "${config.user.home}/.termux/font.ttf" ] && ! [ -L "${config.user.home}/.termux/font.ttf" ]; then
             $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/font.ttf" \
               "${config.user.home}/.termux/font.ttf.bak"
           fi
-          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.terminal.font}" \
-            "${config.user.home}/.termux/font.ttf"
+          if [ ! -e "${config.user.home}/.termux/nns-font.ttf" ]; then
+            $DRY_RUN_CMD cp $VERBOSE_ARG "${config.terminal.font}" \
+              "${config.user.home}/.termux/nns-font.ttf"
+          elif ! cmp -s "${config.terminal.font}" "${config.user.home}/.termux/nns-font.ttf"; then
+            $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${config.user.home}/.termux/nns-font.ttf"
+            $DRY_RUN_CMD cp $VERBOSE_ARG "${config.terminal.font}" \
+              "${config.user.home}/.termux/nns-font.ttf"
+            $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${config.user.home}/.termux/nns-font.ttf"
+          fi
+          if [ "$(readlink "${config.user.home}/.termux/font.ttf")" != "${config.user.home}/.termux/nns-font.ttf" ]; then
+            $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.user.home}/.termux/nns-font.ttf" \
+              "${config.user.home}/.termux/font.ttf"
+          fi
         '';
-      } // optionalAttrs (config.terminal.colors != { }) {
+      } // lib.optionalAttrs (config.terminal.colors != { }) {
         linkColors = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
           if [ -e "${config.user.home}/.termux/colors.properties" ] && ! [ -L "${config.user.home}/.termux/colors.properties" ]; then
@@ -589,19 +600,22 @@ in
           $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${colorsPath}" \
             "${config.user.home}/.termux/colors.properties"
         '';
-      } // (optionalAttrs (config.terminal.font == null) {
+      } // (lib.optionalAttrs (config.terminal.font == null) {
         unlinkFont = /* bash */ ''
-          if [ -e "${config.user.home}/.termux/font.ttf" ] && [ -L "${config.user.home}/.termux/font.ttf" ]; then
+          if [ -L "${config.user.home}/.termux/font.ttf" ]; then
+            if [ "$(readlink "${config.user.home}/.termux/font.ttf")" = "${config.user.home}/.termux/nns-font.ttf" ]; then
+              $DRY_RUN_CMD rm $VERBOSE_ARG -f "${config.user.home}/.termux/nns-font.ttf"
+            fi
             $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/font.ttf"
           fi
         '';
-      }) // (optionalAttrs (config.terminal.colors == { }) {
+      }) // (lib.optionalAttrs (config.terminal.colors == { }) {
         unlinkColors = /* bash */ ''
           if [ -e "${config.user.home}/.termux/colors.properties" ] && [ -L "${config.user.home}/.termux/colors.properties" ]; then
             $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/colors.properties"
           fi
         '';
-      }) // optionalAttrs (cfg.services.enable) {
+      }) // lib.optionalAttrs (cfg.services.enable) {
         # Materialize service run scripts as symlinks into the closure (dry-run
         # friendly, atomic replaces) and render sshd's config the same way.
         # No interaction with a live runsvdir: run scripts are read at each
@@ -617,21 +631,21 @@ in
           $DRY_RUN_CMD cp -f ${lib.pipe ["runsvdir" "runsv" "sv"] [(lib.map (lib.getExe' pkgs.runit)) lib.escapeShellArgs]} ${servicesRoot}/bin/
           $DRY_RUN_CMD mkdir -p ${servicesDir}/nns-unlock-ready
           $DRY_RUN_CMD ln -sfn ${unlockReadyRun} ${servicesDir}/nns-unlock-ready/run
-          ${concatMapStrings (name:
+          ${lib.concatMapStrings (name:
             let
               svc = cfg.services.services.${name};
             in
-            optionalString svc.enable /* bash */ ''
+            lib.optionalString svc.enable /* bash */ ''
               $DRY_RUN_CMD mkdir -p ${servicesDir}/${name}
               $DRY_RUN_CMD ln -sfn ${mkRunScript name svc} ${servicesDir}/${name}/run
             '')
             (attrNames cfg.services.services)}
-          ${concatMapStrings (name:
-            optionalString (! cfg.services.services.${name}.enable) /* bash */ ''
+          ${lib.concatMapStrings (name:
+            lib.optionalString (! cfg.services.services.${name}.enable) /* bash */ ''
               $DRY_RUN_CMD rm -rf ${servicesDir}/${name}
             '')
             (attrNames cfg.services.services)}
-          ${optionalString sshdCfg.enable /* bash */ ''
+          ${lib.optionalString sshdCfg.enable /* bash */ ''
             $DRY_RUN_CMD mkdir -p ${servicesDir}/sshd
             $DRY_RUN_CMD ln -sfn ${sshdRun} ${servicesDir}/sshd/run
             $DRY_RUN_CMD ln -sfn ${sshdConfig} ${sshdStateDir}/sshd_config

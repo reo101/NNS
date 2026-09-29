@@ -15,6 +15,11 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     assert names == required, names ^ required
     assert z.testzip() is None
     assert 'id=nix\n' in z.read('module.prop').decode()
+    policy = z.read('sepolicy.rule')
+    assert b'@APP_' not in policy
+    for domain in ('untrusted_app', 'untrusted_app_25', 'untrusted_app_27', 'untrusted_app_32'):
+        assert policy.count(f'type_transition {domain} nns_exec process nns_app\n'.encode()) == 1
+        assert policy.count(f'allow nns_app {domain} fifo_file {{ read write open getattr ioctl append }}\n'.encode()) == 1
     for name in names:
         assert not Path(name).is_absolute() and '..' not in Path(name).parts
         assert z.getinfo(name).date_time == (1980, 1, 1, 0, 0, 0)

@@ -15,31 +15,9 @@ type nns_exec { file_type exec_type system_file_type }
 # domain per line: ksud's parser silently DROPS type_transition (and
 # possibly other) rules whose source is a brace list - no echo, no
 # error - which left sessions dying on execute_no_trans at first boot.
-allow untrusted_app nns_exec file { getattr open read execute map }
-allow untrusted_app_25 nns_exec file { getattr open read execute map }
-allow untrusted_app_27 nns_exec file { getattr open read execute map }
-allow untrusted_app_32 nns_exec file { getattr open read execute map }
-allow untrusted_app nns_app process { transition siginh rlimitinh }
-allow untrusted_app_25 nns_app process { transition siginh rlimitinh }
-allow untrusted_app_27 nns_app process { transition siginh rlimitinh }
-allow untrusted_app_32 nns_app process { transition siginh rlimitinh }
-allow untrusted_app nns_app process2 { nnp_transition nosuid_transition }
-allow untrusted_app_25 nns_app process2 { nnp_transition nosuid_transition }
-allow untrusted_app_27 nns_app process2 { nnp_transition nosuid_transition }
-allow untrusted_app_32 nns_app process2 { nnp_transition nosuid_transition }
-allow untrusted_app nns_app process noatsecure
-allow untrusted_app_25 nns_app process noatsecure
-allow untrusted_app_27 nns_app process noatsecure
-allow untrusted_app_32 nns_app process noatsecure
-allow nns_app untrusted_app process sigchld
-allow nns_app untrusted_app_25 process sigchld
-allow nns_app untrusted_app_27 process sigchld
-allow nns_app untrusted_app_32 process sigchld
+@APP_TRANSITIONS@
 allow nns_app nns_exec file { entrypoint getattr open read execute map }
-type_transition untrusted_app nns_exec process nns_app
-type_transition untrusted_app_25 nns_exec process nns_app
-type_transition untrusted_app_27 nns_exec process nns_app
-type_transition untrusted_app_32 nns_exec process nns_app
+@APP_TYPE_TRANSITIONS@
 # Namespace setup: unshare(CLONE_NEWUSER|CLONE_NEWNS), id maps, mounts.
 # SELinux checks capabilities in non-init user namespaces against the
 # cap_userns class, not capability.
@@ -136,6 +114,9 @@ allow nns_app nns_app unix_stream_socket { connect create getattr getopt read se
 # socket (nns_app -> nns_app) denies and every profile gpg-connect-age call
 # retries forever.
 allow nns_app nns_app unix_stream_socket connectto
+# Rish creates and uses a self datagram socket. The ROM grants these
+# permissions to untrusted_app_27; its compiled self rule misses nns_app.
+allow nns_app nns_app unix_dgram_socket { connect create write }
 # Adding a runtime type to netdomain does not regenerate compiled `self`
 # socket rules. Permit ordinary client sockets explicitly for the new type.
 allow nns_app nns_app { tcp_socket udp_socket } { connect create getattr getopt read setopt shutdown write }
@@ -205,6 +186,8 @@ allowxperm nns_app system_file file ioctl 0x542a
 # exists for this (nns_app -> devpts) pair, so base ioctl covers every
 # tty ioctl there.
 allow nns_app devpts chr_file { getattr ioctl open read write }
+# glibc ttyname() enumerates /dev/pts after resolving /proc/self/fd/0.
+allow nns_app devpts dir { getattr open read search }
 # Non-legacy TC* ioctls (TCGETS2/TCSETS2) on the app's own pty are denied by
 # the platform's devpts xperm whitelist, which our allowxperm lines cannot
 # extend (ksud never loads them). The bridge shim falls back to the legacy
@@ -212,7 +195,4 @@ allow nns_app devpts chr_file { getattr ioctl open read write }
 # budget and hid real denials (audit_lost=7046).
 dontaudit nns_app untrusted_app_all_devpts chr_file ioctl
 # Inherited Emacs/process pipes keep the creator's SID.
-allow nns_app untrusted_app fifo_file { read write open getattr ioctl append }
-allow nns_app untrusted_app_25 fifo_file { read write open getattr ioctl append }
-allow nns_app untrusted_app_27 fifo_file { read write open getattr ioctl append }
-allow nns_app untrusted_app_32 fifo_file { read write open getattr ioctl append }
+@APP_FIFO_RULES@

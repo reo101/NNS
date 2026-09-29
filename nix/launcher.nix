@@ -4,12 +4,10 @@ stdenvNoCC.mkDerivation {
   version = "3.0.0";
   src = ../module/src/nix-enter.zig;
   dontUnpack = true;
-  dontConfigure = true;
   dontFixup = true;
   nativeBuildInputs = [ zig ];
   allowedReferences = [ ];
   buildPhase = ''
-    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
     zig build-exe "$src" -target ${target} -O ReleaseSmall -fstrip -femit-bin=nix-enter
   '';
   installPhase = ''

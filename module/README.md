@@ -154,11 +154,30 @@ nix.conf at `/data/nix/etc/nix/nix.conf` (root builds, no nixbld, sandbox off).
 
 ```sh
 nix build .#nns-module           # -> result/nns-module.zip (launcher + bridge + scripts)
+nix build .#nns-sepolicy         # -> rendered sepolicy.rule from module/sepolicy.rule.in
+nix build .#nns-sepolicy-candidates # -> result/sepolicy-candidates.txt (review only)
+nix build .#nns-rom-sepolicy     # -> compiled ROM baseline (x86_64-linux, 3.2 GB OTA download)
 # or hack the launcher directly:
 zig build-exe src/nix-enter.zig -target aarch64-linux-musl -O ReleaseSmall -femit-bin=bin/nix-enter
 # push module/* to /data/adb/modules/nix/ and re-sync the zip
 adb reboot     # only needed once, for post-fs-data store prep
 ```
+
+The policy template expands the app-domain transitions and pipe rules into
+single-source statements that ksud accepts. The candidate report cites public
+Evolution X policy revisions preceding the 2026-08-08 OTA build, but is **not**
+a compiled policy: M4 macros, other build inputs and proprietary vendor rules
+are absent. Candidate statements are never added to the installed policy
+without review. The separate ROM baseline derivation downloads the official
+2026-08-08 Pixel 7 Pro OTA (SHA-256 pinned), extracts only its vendor partition,
+and pins `etc/selinux/precompiled_sepolicy` as a flat fixed-output derivation
+against the installed ROM's pre-module policy SHA-256. It does not feed the
+module policy or package a captured device artifact. The extraction needs no
+network, but a cold build must fetch the 3.2 GB OTA unless the input or final
+output is available from a store or substituter. Query the result with `sesearch -A -s
+untrusted_app_27 ./result` (SETools); include target, class and permission
+filters when reviewing individual operations. The live policy includes KernelSU
+patches and is not the ROM baseline.
 
 Host-side full-system deploy (NoD generation + activation): from
 `~/.config/rix101`, `deploy .#cheetah --skip-checks` after

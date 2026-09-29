@@ -9,7 +9,7 @@
 (nns-mode 1)
 
 (ert-deftest nns-real-synchronous-process ()
-  (should-not (file-exists-p "/nix/bin/nns-test-program"))
+  (should (file-exists-p "/nix/bin/nns-test-program"))
   (should (equal (executable-find "nns-test-program") "/nix/bin/nns-test-program"))
   (with-temp-buffer
     (should (zerop (call-process "nns-test-program" nil t nil "with spaces")))

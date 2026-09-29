@@ -24,7 +24,7 @@
 #     <flake>#nixOnDroidConfigurations.<device>.activationPackage
 #   nix-enter -- /nix/store/<gen>-nix-on-droid-generation/activate
 
-{ config, lib, pkgs, ... }:
+{ config, lib, options, pkgs, ... }:
 
 let
   inherit (lib) attrNames concatMapStringsSep map mkEnableOption mkForce mkIf mkOption optional toString types;
@@ -543,7 +543,9 @@ in
     # key silently loses. Overrides must therefore replace the whole option
     # value, which means replicating the steps other modules contribute
     # (home-manager's priority fixup; upgrade's dev/shm bootstrap).
-    build = {
+    build = lib.optionalAttrs (options ? build && options.build ? linkProotStatic) {
+      linkProotStatic = mkForce false;
+    } // {
       activationBefore = mkForce ({
         # /bin/sh and /usr/bin/env live in the app prefix now; launcher
         # sessions see the real Android root and the store, not a proot tree.

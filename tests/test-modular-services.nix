@@ -7,6 +7,10 @@ let
     modules = [
       ../nix/nix-on-droid.nix
       {
+        options.build.linkProotStatic = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+        };
         config = {
           _module.freeformType = lib.types.lazyAttrsOf lib.types.anything;
           nns.enable = true;
@@ -56,6 +60,7 @@ in
 assert errors valid == [ ];
 assert valid.config.warnings == [ ];
 assert valid.config.nns.services.services.example.nns.startAt == "unlock";
+assert !valid.config.build.linkProotStatic;
 assert lib.hasInfix "nns-run-example" valid.config.build.activation.materializeServices;
 assert errors disabled == [ ];
 assert !(lib.hasInfix "nns-run-example" disabled.config.build.activation.materializeServices);

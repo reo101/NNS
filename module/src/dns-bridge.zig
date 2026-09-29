@@ -26,7 +26,9 @@ const RealIsatty = *const fn (c_int) callconv(.c) c_int;
 const RealTcGetattr = *const fn (c_int, ?*anyopaque) callconv(.c) c_int;
 const RealTcSetattr = *const fn (c_int, c_int, ?*anyopaque) callconv(.c) c_int;
 const RealFstat = *const fn (c_int, ?*anyopaque) callconv(.c) c_int;
+const RealTtyname = *const fn (c_int) callconv(.c) ?[*:0]u8;
 const Errno = *const fn () callconv(.c) *c_int;
+var tty_name_buffer: [4096]u8 = undefined;
 
 fn errnoPtr() ?*c_int {
     const f: Errno = @ptrCast(@alignCast(dlsym(next, "__errno_location") orelse return null));
@@ -81,6 +83,32 @@ pub export fn tcsetattr(fd: c_int, actions: c_int, in: ?*anyopaque) c_int {
     const rc = native(fd, actions, in);
     if (rc == 0) return 0;
     return tcRetry(fd, 0x5402, in, in);
+}
+
+// glibc's ttyname calls its hidden __tcgetattr, bypassing the ioctl and
+// tcgetattr preload hooks. Recover only for app ptys after that probe is
+// refused by the platform's TCGETS2 ioctl whitelist.
+pub export fn ttyname(fd: c_int) ?[*:0]u8 {
+    const native: RealTtyname = @ptrCast(@alignCast(dlsym(next, "ttyname") orelse return null));
+    if (native(fd)) |name| return name;
+    if (dlsym(next, "gnu_get_libc_version") == null) return null;
+    const ep = errnoPtr() orelse return null;
+    const original_error = ep.*;
+    if (original_error != 13 and original_error != 1) return null;
+    if (isatty(fd) != 1) {
+        ep.* = original_error;
+        return null;
+    }
+    var fd_path: [32]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&fd_path, "/proc/self/fd/{d}", .{fd}) catch return null;
+    const length = readlink(path.ptr, &tty_name_buffer, tty_name_buffer.len - 1);
+    if (length <= 0 or !std.mem.startsWith(u8, tty_name_buffer[0..@intCast(length)], "/dev/pts/")) {
+        ep.* = original_error;
+        return null;
+    }
+    tty_name_buffer[@intCast(length)] = 0;
+    ep.* = 0;
+    return @ptrCast(&tty_name_buffer);
 }
 
 pub export fn fstat(fd: c_int, buf: ?*anyopaque) c_int {

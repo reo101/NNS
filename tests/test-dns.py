@@ -84,6 +84,9 @@ def checks():
         finally:
             libc.freeaddrinfo(out)  # real glibc ownership, not a custom free
 
+    non_terminal = subprocess.run(['tty'], stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    assert (non_terminal.returncode, non_terminal.stdout, non_terminal.stderr) == (1, 'not a tty\n', '')
+
     before_env = dict(os.environ)
     before_fds = len(os.listdir('/proc/self/fd'))
     lookup(b'environment')

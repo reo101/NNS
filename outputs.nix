@@ -56,6 +56,13 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           includeEmulator = true;
           includeNDK = false;
         }).androidsdk;
+        avfClientSdk = (androidTestPkgs.androidenv.composeAndroidPackages {
+          platformVersions = [ "35" ];
+          buildToolsVersions = [ "35.0.0" ];
+          includeSystemImages = false;
+          includeEmulator = false;
+          includeNDK = false;
+        }).androidsdk;
         stockAndroidKernel = pkgs.runCommandLocal "android35-stock-kernel" { allowedReferences = [ ]; } ''
           cp ${androidTestSdk}/libexec/android-sdk/system-images/android-35/google_apis/x86_64/kernel-ranchu "$out"
         '';
@@ -129,6 +136,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           test-android = androidTest.driver;
           android-vm-test = androidTest;
           android-test-apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
+          avf-client = pkgs.callPackage ./nix/avf-client.nix { androidSdk = avfClientSdk; };
+          avf-probe-initramfs = pkgs.callPackage ./nix/avf-probe-initramfs.nix { };
           clang-cheetah = clang;
           cheetah = bundle;
           default = bundle;

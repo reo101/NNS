@@ -251,6 +251,15 @@ let
     }}"
     else "";
 
+  # Same rendering as colors.properties, for the terminal settings file.
+  propertiesPath =
+    if config.terminal.properties != { }
+    then "${pkgs.writeTextFile {
+      name = "termux.properties";
+      text = lib.generators.toKeyValue { } config.terminal.properties;
+    }}"
+    else "";
+
   # ---- nns.services: declarative runit services supervised at boot ----
 
   # State lives in DE space: service dirs are materialized by activation
@@ -500,6 +509,22 @@ in
       };
     };
 
+    terminal.properties = mkOption {
+      type = types.lazyAttrsOf types.str;
+      default = { };
+      example = lib.literalExpression ''{
+        fullscreen = "true";
+        vibrate = "false";
+        extra-keys = "[['ESC', '/', '-'], ['CTRL', 'ALT', 'TAB']]";
+      }'';
+      description = ''
+        Settings rendered into ~/.termux/termux.properties on activation,
+        following the terminal.font and terminal.colors family. Keys are
+        the Termux property names; values are strings, as the properties
+        format has no other types.
+      '';
+    };
+
   };
 
   config = mkIf cfg.enable {
@@ -645,8 +670,23 @@ in
             $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/colors.properties" \
               "${config.user.home}/.termux/colors.properties.bak"
           fi
-          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${colorsPath}" \
+          # Physical store path: outside this namespace /nix does not exist
+          # for the terminal UI, but /data/nix/store always does.
+          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "/data${colorsPath}" \
             "${config.user.home}/.termux/colors.properties"
+        '';
+      } // lib.optionalAttrs (config.terminal.properties != { }) {
+        # The terminal UI resolves this file outside any launcher namespace,
+        # where /nix does not exist; the store's physical home under /data
+        # does, so link straight there instead of copying bytes around.
+        linkProperties = /* bash */ ''
+          $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
+          if [ -e "${config.user.home}/.termux/termux.properties" ] && ! [ -L "${config.user.home}/.termux/termux.properties" ]; then
+            $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/termux.properties" \
+              "${config.user.home}/.termux/termux.properties.bak"
+          fi
+          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "/data${propertiesPath}" \
+            "${config.user.home}/.termux/termux.properties"
         '';
       } // (lib.optionalAttrs (config.terminal.font == null) {
         unlinkFont = /* bash */ ''
@@ -662,6 +702,15 @@ in
           if [ -e "${config.user.home}/.termux/colors.properties" ] && [ -L "${config.user.home}/.termux/colors.properties" ]; then
             $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/colors.properties"
           fi
+        '';
+      }) // (lib.optionalAttrs (config.terminal.properties == { }) {
+        # Only remove links the module made; foreign symlinks stay.
+        unlinkProperties = /* bash */ ''
+          case "$(readlink "${config.user.home}/.termux/termux.properties" 2>/dev/null)" in
+            /data/nix/store/*)
+              $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/termux.properties"
+              ;;
+          esac
         '';
       }) // lib.optionalAttrs (cfg.services.enable) {
         # Materialize service run scripts as symlinks into the closure (dry-run

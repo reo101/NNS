@@ -33,10 +33,20 @@ From `outputs.nix`: `nns-module`, `nix-enter` (+ `-host`), `nns-dns`,
 
 Launcher, store, bridge, kernel and the VM test: mature, documented in their
 own READMEs. The session & services layer (deployed through rix101) is
-**in progress**: green end-to-end on the device — deploy confirmed, kill and
-boot tests hand-run — but docs are partial and the boot layer has no
-regression tests yet. Scar-by-scar rationale for the migration lives in the
-commit log (`jj log`), not all of it in prose.
+**in progress**: green end-to-end on the device — deploy confirmed, kill tests
+hand-run, and boot/unlock smoke-tested — but docs are partial. Scar-by-scar
+rationale for the migration lives in the commit log (`jj log`), not all of it
+in prose.
+
+## Cheetah boot/unlock regression
+
+Run `python3 tests/device-boot-smoke.py prepare` from this checkout to reboot
+cheetah and check pre-unlock supervision. **Do not unlock the phone** until it
+prints the pre-unlock result. After unlocking, run
+`python3 tests/device-boot-smoke.py verify` to check SSH and launch Android
+Emacs to verify its graphical server. Set `ANDROID_SERIAL` for another ADB
+serial; SSH currently targets `cheetah.lan:8022`. This test requires a real
+phone and is not part of `nix flake check`.
 
 ## Android Emacs recovery
 

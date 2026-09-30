@@ -68,14 +68,18 @@ boot.
 The store lives at `/data/nix/{store,var,tmp}` (f2fs, persistent, survives
 reboots; whatever you install stays installed).
 
-## For app developers (the emacs problem)
+## For app developers (Android Emacs)
 
 A running app's path resolution is rooted at its own `fs->root`; no mount
-namespace trick can change that after the fact. Apps that spawn subprocesses
-can opt in by running them through `su -c nix-enter …` (grant the app in
-SukiSU). Apps that only exec in-process (android emacs) need either the
-shared-uid trick (exec the helper from a paired root-capable app) or a root
-session daemon the app talks to over a socket — v2 territory.
+namespace trick can change that after the fact. Apps can launch subprocesses
+through `nix-enter` without moving the app itself into `/nix`. Native Android
+Emacs uses `nns.el` for those subprocesses and remains the GUI server. The
+unlock-gated `emacs-socket` service prepares `/data/nix/var/emacs-server/` for
+both the GUI app and NoD; `emacsclient` in NoD connects to its Unix socket.
+The GUI accesses NoD-private files through TRAMP over SSH to
+`127.0.0.1:8022`, using a pinned host key and a restricted app key. This path
+stays on the phone; it does not depend on LAN access. For host-side recovery
+after app-data loss, see [Android Emacs recovery](../README.md#android-emacs-recovery).
 
 ## Sessions and supervised services (in progress)
 
@@ -135,9 +139,11 @@ privilege separation directory".
 Status: end-to-end green on device (deploy confirmed, kill + boot tests
 hand-run). Shizuku's `app_process`/Binder path is now verified on-device; the
 Nix-on-Droid module installs NNS-owned `rish`/`su`/`sudo` wrappers so the stale
-upstream `service list` preflight is bypassed. Still missing: doc depth,
-boot-layer regression tests, and a durable transport story (LAN / adb-forward /
-WireGuard flap in `meta.nix`). Sepolicy rationale lives in the commit log (`jj log`), not next to `sepolicy.rule`;
+upstream `service list` preflight is bypassed. Still missing: doc depth and
+broader boot-layer regression coverage. Host-initiated deployments use
+`cheetah.lan:8022` from rix101's `meta.nix`; this is separate from Emacs's
+on-phone loopback connection. Sepolicy rationale lives in the commit log
+(`jj log`), not next to `sepolicy.rule`;
 ksud's `allowxperm` rules are dropped by its sepolicy parser, so the
 terminal-ioctl workaround rides in `libnns-dns.so` — see `src/DNS.md`.
 

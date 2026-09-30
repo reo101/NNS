@@ -18,7 +18,7 @@ EvolutionX 16, SukiSU Ultra.
   See [kernel/README.md](kernel/README.md).
 - `tests/` — unit and integration tests (dns, repack, userns, emacs) plus an
   Android VM harness; see [tests/android/README.md](tests/android/README.md).
-- `integrations/emacs/` — `nns.el`.
+- `integrations/emacs/` — `nns.el` and Android Emacs recovery scripts.
 - `build.zig`, `module/src/*.zig` — launcher and preload-bridge sources;
   bridge documentation in [module/src/DNS.md](module/src/DNS.md).
 
@@ -37,6 +37,29 @@ own READMEs. The session & services layer (deployed through rix101) is
 boot tests hand-run — but docs are partial and the boot layer has no
 regression tests yet. Scar-by-scar rationale for the migration lives in the
 commit log (`jj log`), not all of it in prose.
+
+## Android Emacs recovery
+
+After installing or clearing native Android Emacs, unlock and open it once so
+Android creates its app-private files, then close it. With ADB connected,
+NoD's SSH/socket services running, the desktop Emacs configuration, and
+Maple Mono NF CN Regular installed on the host, run:
+
+```sh
+./integrations/emacs/provision-android-emacs.sh
+```
+
+The command restores the GUI configuration, font, and straight.el repositories
+(if absent), preserves an existing app SSH key or creates one after a wipe,
+updates NoD's restricted authorized key, and pins its current SSH host key.
+It refuses a changed pinned host key rather than silently trusting it. It
+refreshes the existing `emacs-socket` service, starts Android Emacs, and waits
+for its server. Set `ANDROID_SERIAL` to select a different ADB device.
+Do not run it while Android Emacs is open.
+
+From NoD zsh or Nushell, `emacs-gui FILE` opens a NoD path in that GUI via
+TRAMP, for example `emacs-gui ~/.zshrc`. The GUI must be running; the NoD
+shell does not start a second Emacs server.
 
 ## Docs
 

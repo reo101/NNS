@@ -533,6 +533,18 @@ in
 
     # runsvdir/sv/pause for nns.services; also what nns-wait's `up` mode
     # shells out to (rendered run scripts put the profile bin on PATH).
+    # AVF guests reach the phone's nix daemon through this bridge: the
+    # guest's plain daemon socket tunnels over vsock to `nix-daemon --stdio`,
+    # so guest nix works with NIX_REMOTE=daemon and no config changes. The
+    # launcher preamble supplies NIX_CONF_DIR and the /nix store namespace.
+    nns.services.services.nix-bridge = mkIf cfg.services.enable {
+      process.argv = [
+        "${lib.getExe pkgs.socat}"
+        "VSOCK-LISTEN:15555,fork"
+        "SYSTEM:/nix/var/nix/profiles/default/bin/nix-daemon --stdio"
+      ];
+    };
+
     environment.packages = lib.optional cfg.services.enable pkgs.runit;
 
     environment.sessionVariables.NIX_SSL_CERT_FILE =

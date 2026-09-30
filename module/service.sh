@@ -4,9 +4,9 @@
 # the ROM's init runs `restorecon --recursive --skip-ce /data` at
 # post-fs-data, and our old system_file labels made it pay a denial +
 # printk + audit record per store path - 332 seconds at 25k paths.
-# Aligned labels make the walk match and skip; new objects inherit the
-# label from their (aligned) parent dirs, so no per-file store walk is
-# needed anymore. Label only the public store/config, never app data.
+# Aligned labels avoid relabel denials; skipping the store also requires
+# its security.sehash digest (see module/README.md). New objects inherit
+# the label from their parent dirs. Label only public store/config, never app data.
 LOG=/data/local/tmp/nix-service.log
 exec > "$LOG" 2>&1
 

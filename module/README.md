@@ -169,6 +169,18 @@ ln -sfn default /nix/var/nix/profiles/profile
 `/data/nix/etc/profile` sources on session start (`nix-enter sh -c '. /data/nix/etc/profile; …'`);
 nix.conf at `/data/nix/etc/nix/nix.conf` (root builds, no nixbld, sandbox off).
 
+Android init recursively restores labels under `/data` before NNS boot scripts run.
+After populating the store, seed its `security.sehash` cache once:
+
+```sh
+adb shell su -c 'restorecon -R /data/nix/store'
+```
+
+The first pass took 973 seconds on cheetah. A repeated pass should report
+`Skipping restorecon on directory(/data/nix/store)`; on the next boot,
+init's `/data` restorecon fell from 448.6 seconds to 0.668 seconds.
+The store's files retain their expected `system_data_file` label.
+
 ## Deploy
 
 ```sh

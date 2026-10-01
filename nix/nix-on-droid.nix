@@ -170,54 +170,54 @@ let
     static="''${etc}/static"
 
     atomic_symlink() {
-        local source="''${1}"
-        local target="''${2}"
-        local target_tmp="''${target}.tmp"
+      local source="''${1}"
+      local target="''${2}"
+      local target_tmp="''${target}.tmp"
 
-        $VERBOSE_ECHO "Atomic symlink ''${source} to ''${target}..."
+      $VERBOSE_ECHO "Atomic symlink ''${source} to ''${target}..."
 
-        mkdir $VERBOSE_ARG -p "$(dirname "''${target_tmp}")"
-        ln -sfn "''${source}" "''${target_tmp}"
-        mv -T "''${target_tmp}" "''${target}"
+      mkdir $VERBOSE_ARG -p "$(dirname "''${target_tmp}")"
+      ln -sfn "''${source}" "''${target_tmp}"
+      mv -T "''${target_tmp}" "''${target}"
     }
 
     is_static() {
-        local path="''${1}"
+      local path="''${1}"
 
-        if [[ -L "''${path}" ]]; then
-            [[ "$(readlink "''${path}")" == "''${static}"/* ]]
-            return
-        fi
+      if [[ -L "''${path}" ]]; then
+        [[ "$(readlink "''${path}")" == "''${static}"/* ]]
+        return
+      fi
 
-        if [[ -d "''${path}" ]]; then
-            local file
-            for file in "''${path}"/*; do
-                is_static "''${file}" || return
-            done
-        fi
+      if [[ -d "''${path}" ]]; then
+        local file
+        for file in "''${path}"/*; do
+          is_static "''${file}" || return
+        done
+      fi
 
-        false
+      false
     }
 
     rm $VERBOSE_ARG -f "''${etc}/static"
     atomic_symlink "''${new_etc}" "''${static}"
 
     for name in $(find "''${new_etc}/" -type l | sed -e "s,^''${new_etc}/,," ); do
-        target="''${etc}/''${name}"
+      target="''${etc}/''${name}"
 
-        mkdir $VERBOSE_ARG -p "$(dirname "''${target}")"
+      mkdir $VERBOSE_ARG -p "$(dirname "''${target}")"
 
-        if [[ -e "''${target}" ]] && ! is_static "''${target}"; then
-            if [[ -n "''${backup_extension}" ]]; then
-                echo "Backing up ''${target} to ''${target}''${backup_extension}..."
-                cp "''${target}" "''${target}''${backup_extension}"
-                atomic_symlink "''${static}/''${name}" "''${target}"
-            else
-                echo "Linking of ''${target} failed. Please remove this file."
-            fi
+      if [[ -e "''${target}" ]] && ! is_static "''${target}"; then
+        if [[ -n "''${backup_extension}" ]]; then
+          echo "Backing up ''${target} to ''${target}''${backup_extension}..."
+          cp "''${target}" "''${target}''${backup_extension}"
+          atomic_symlink "''${static}/''${name}" "''${target}"
         else
-            atomic_symlink "''${static}/''${name}" "''${target}"
+          echo "Linking of ''${target} failed. Please remove this file."
         fi
+      else
+        atomic_symlink "''${static}/''${name}" "''${target}"
+      fi
     done
   '';
 
@@ -678,29 +678,53 @@ in
           fi
         '';
       } // lib.optionalAttrs (config.terminal.colors != { }) {
+        # Same rule as linkProperties: the loader ignores symlinks, so the
+        # rendered colors are copied into app-owned storage and linked
+        # locally.
         linkColors = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
           if [ -e "${config.user.home}/.termux/colors.properties" ] && ! [ -L "${config.user.home}/.termux/colors.properties" ]; then
             $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/colors.properties" \
               "${config.user.home}/.termux/colors.properties.bak"
           fi
-          # Physical store path: outside this namespace /nix does not exist
-          # for the terminal UI, but /data/nix/store always does.
-          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "/data${colorsPath}" \
-            "${config.user.home}/.termux/colors.properties"
+          if [ ! -e "${config.user.home}/.termux/nns-colors.properties" ]; then
+            $DRY_RUN_CMD cp $VERBOSE_ARG "${colorsPath}" \
+              "${config.user.home}/.termux/nns-colors.properties"
+          elif ! cmp -s "${colorsPath}" "${config.user.home}/.termux/nns-colors.properties"; then
+            $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${config.user.home}/.termux/nns-colors.properties"
+            $DRY_RUN_CMD cp $VERBOSE_ARG "${colorsPath}" \
+              "${config.user.home}/.termux/nns-colors.properties"
+            $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${config.user.home}/.termux/nns-colors.properties"
+          fi
+          if [ "$(readlink "${config.user.home}/.termux/colors.properties")" != "${config.user.home}/.termux/nns-colors.properties" ]; then
+            $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.user.home}/.termux/nns-colors.properties" \
+              "${config.user.home}/.termux/colors.properties"
+          fi
         '';
       } // lib.optionalAttrs (config.terminal.properties != { }) {
-        # The terminal UI resolves this file outside any launcher namespace,
-        # where /nix does not exist; the store's physical home under /data
-        # does, so link straight there instead of copying bytes around.
+        # The terminal UI only accepts a regular file here: termux's properties
+        # loader explicitly ignores symlinks (2022 hardening), so copy the
+        # rendered store file into app-owned storage and link locally, the
+        # same way the font is handled.
         linkProperties = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
           if [ -e "${config.user.home}/.termux/termux.properties" ] && ! [ -L "${config.user.home}/.termux/termux.properties" ]; then
             $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/termux.properties" \
               "${config.user.home}/.termux/termux.properties.bak"
           fi
-          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "/data${propertiesPath}" \
-            "${config.user.home}/.termux/termux.properties"
+          if [ ! -e "${config.user.home}/.termux/nns-termux.properties" ]; then
+            $DRY_RUN_CMD cp $VERBOSE_ARG "${propertiesPath}" \
+              "${config.user.home}/.termux/nns-termux.properties"
+          elif ! cmp -s "${propertiesPath}" "${config.user.home}/.termux/nns-termux.properties"; then
+            $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${config.user.home}/.termux/nns-termux.properties"
+            $DRY_RUN_CMD cp $VERBOSE_ARG "${propertiesPath}" \
+              "${config.user.home}/.termux/nns-termux.properties"
+            $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${config.user.home}/.termux/nns-termux.properties"
+          fi
+          if [ "$(readlink "${config.user.home}/.termux/termux.properties")" != "${config.user.home}/.termux/nns-termux.properties" ]; then
+            $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.user.home}/.termux/nns-termux.properties" \
+              "${config.user.home}/.termux/termux.properties"
+          fi
         '';
       } // (lib.optionalAttrs (config.terminal.font == null) {
         unlinkFont = /* bash */ ''
@@ -713,18 +737,22 @@ in
         '';
       }) // (lib.optionalAttrs (config.terminal.colors == { }) {
         unlinkColors = /* bash */ ''
-          if [ -e "${config.user.home}/.termux/colors.properties" ] && [ -L "${config.user.home}/.termux/colors.properties" ]; then
+          if [ -L "${config.user.home}/.termux/colors.properties" ]; then
+            if [ "$(readlink "${config.user.home}/.termux/colors.properties")" = "${config.user.home}/.termux/nns-colors.properties" ]; then
+              $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/nns-colors.properties"
+            fi
             $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/colors.properties"
           fi
         '';
       }) // (lib.optionalAttrs (config.terminal.properties == { }) {
         # Only remove links the module made; foreign symlinks stay.
         unlinkProperties = /* bash */ ''
-          case "$(readlink "${config.user.home}/.termux/termux.properties" 2>/dev/null)" in
-            /data/nix/store/*)
-              $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/termux.properties"
-              ;;
-          esac
+          if [ -L "${config.user.home}/.termux/termux.properties" ]; then
+            if [ "$(readlink "${config.user.home}/.termux/termux.properties")" = "${config.user.home}/.termux/nns-termux.properties" ]; then
+              $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/nns-termux.properties"
+            fi
+            $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/termux.properties"
+          fi
         '';
       }) // lib.optionalAttrs (cfg.services.enable) {
         # Materialize service run scripts as symlinks into the closure (dry-run

@@ -63,7 +63,7 @@ assert valid.config.warnings == [ ];
 assert valid.config.nns.services.services.example.nns.startAt == "unlock";
 assert !valid.config.build.linkProotStatic;
 assert lib.hasInfix "nns-run-example" valid.config.build.activation.materializeServices;
-assert lib.hasInfix "/data/nix/store" valid.config.build.activation.linkProperties;
+assert lib.hasInfix "nns-termux.properties" valid.config.build.activation.linkProperties;
 assert errors disabled == [ ];
 assert !(lib.hasInfix "nns-run-example" disabled.config.build.activation.materializeServices);
 assert builtins.length (errors invalid) == 2;

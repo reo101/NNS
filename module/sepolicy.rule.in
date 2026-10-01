@@ -200,3 +200,8 @@ allow nns_app devpts dir { getattr open read search }
 dontaudit nns_app untrusted_app_all_devpts chr_file ioctl
 # Inherited Emacs/process pipes keep the creator's SID.
 @APP_FIFO_RULES@
+# ART boots by creating a userfaultfd anon-inode; inside the launcher's
+# unprivileged user namespace the self-labeled create is denied, which killed
+# app_process before its first log line (silent rish / su failures with the
+# server healthy). My root, mount-only debug chains never took this path.
+allow nns_app nns_app:anon_inode { create getattr ioctl map open read write }

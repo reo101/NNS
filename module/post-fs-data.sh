@@ -130,6 +130,16 @@ chmod 644 /data/nix/etc/app-id
 rm -f /data/nix/var/nns/ready/*
 rm -rf /data/nix/var/nns/services/*/supervise
 
+# nix store gc keeps only what is reachable from /nix/var/nix/gcroots.
+# The bootstrap profile links (default-1, nix-on-droid generations) are
+# created manually and would be collected otherwise - root the whole
+# profiles directory once; every link inside it is then protected.
+if [ ! -e /data/nix/var/nix/gcroots/profiles ]; then
+  mkdir -p /data/nix/var/nix/gcroots
+  ln -sfn /data/nix/var/nix/profiles /data/nix/var/nix/gcroots/profiles
+  chown 0:0 /data/nix/var/nix/gcroots/profiles
+fi
+
 # convenience symlink inside the store dir for on-device poking
 [ -e /data/local/tmp/nix ] || ln -s /data/nix /data/local/tmp/nix
 

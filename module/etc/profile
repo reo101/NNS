@@ -1,8 +1,11 @@
-# NNS session profile — sourced by shells started inside nix-enter
-# canonical store first, system fallback (getprop, am, etc. still reachable)
+# NNS system profile — sourced by interactive shells inside nix-enter
+# (the launcher sets ENV to this file). Minimal, root-owned: the nix
+# daemon's own tooling, bridge helpers and bare sessions. App-scoped
+# environments (NoD home-manager, per-user profiles) live elsewhere and
+# are layered on top by their own login entry points.
 
-export NIX_PROFILE=/nix/var/nix/profiles/profile
-export PATH=$NIX_PROFILE/bin:/nix/var/nix/profiles/default/bin:$PATH
+export NIX_PROFILE=/nix/var/nix/profiles/system-profile
+export PATH=$NIX_PROFILE/bin:/nix/var/nix/profiles/profile/bin:$PATH
 
 # per-session tmpfs, wiped on exit
 export TMPDIR=/nix/tmp
@@ -14,8 +17,13 @@ if [ -z "$HOME_SET_BY_USER" ]; then
   mkdir -p "$HOME" 2>/dev/null || true
 fi
 
-# nix plumbing
-export NIX_REMOTE=local
+# root contexts talk to the store directly; app-uid sessions go through
+# the root daemon (NIX_REMOTE=daemon)
+if [ "$(id -u 2>/dev/null)" = "0" ]; then
+  export NIX_REMOTE=local
+else
+  export NIX_REMOTE=daemon
+fi
 export NIX_STORE_DIR=/nix/store
 export NIX_STATE_DIR=/nix/var/nix
 export NIX_CONF_DIR=/data/nix/etc/nix

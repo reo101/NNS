@@ -135,6 +135,27 @@ fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u
             env = entries.ptr;
         }
     }
+    // Interactive POSIX shells (mksh, dash, bash in sh mode) source $ENV at
+    // startup: point it at the staged system profile so a bare
+    // `nix-enter -- sh` session starts logged into the system profile.
+    // Non-interactive shells ignore ENV, so run scripts and build hooks
+    // are unaffected; a caller-provided ENV wins.
+    {
+        const env_profile = "/data/nix/etc/profile";
+        const current = init.environ_map.get("ENV") orelse "";
+        if (current.len == 0) {
+            const entry = std.fmt.allocPrintSentinel(init.gpa, "ENV={s}", .{env_profile}, 0) catch @panic("out of memory");
+            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 2, null) catch @panic("out of memory");
+            var count: usize = 0;
+            for (std.mem.span(env)) |item| {
+                entries[count] = item;
+                count += 1;
+            }
+            entries[count] = entry.ptr;
+            entries[count + 1] = null;
+            env = entries.ptr;
+        }
+    }
     if (std.mem.indexOfScalar(u8, std.mem.span(args[0]), '/') == null) {
         var dirs = std.mem.splitScalar(u8, init.environ_map.get("PATH") orelse "/system/bin:/bin:/usr/bin", ':');
         var buf: [4096]u8 = undefined;

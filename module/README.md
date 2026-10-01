@@ -164,12 +164,13 @@ adb push bootstrap.tar /data/local/tmp/
 su -c 'nix-enter <tar> -xf /data/local/tmp/bootstrap.tar -C /'
 ```
 
-Then wire the profile:
+Then wire the profile (versioned, so a broken bump is rolled back by
+repointing `system-profile`):
 
 ```sh
-ln -sfn <env-store-path> /nix/var/nix/profiles/default-1
-ln -sfn default-1 /nix/var/nix/profiles/default
-ln -sfn default /nix/var/nix/profiles/profile
+ln -sfn <env-store-path> /nix/var/nix/profiles/system-profile-1-link
+ln -sfn system-profile-1-link /nix/var/nix/profiles/system-profile
+ln -sfn system-profile /nix/var/nix/profiles/profile
 ```
 
 `/data/nix/etc/profile` sources on session start (`nix-enter sh -c '. /data/nix/etc/profile; …'`);

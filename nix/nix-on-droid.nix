@@ -94,7 +94,13 @@ let
     export NNS_RISH_PROPERTY_INFO_SHIM=1
     export LD_PRELOAD=/data/nix/lib/libnns-dns.so
     export PATH=/bin:/system/bin
-    exec /system/bin/app_process -Djava.class.path="$dst" /system/bin \
+    # Launcher sessions run in an unprivileged userns with no zygote parent,
+    # so ART must create the userfaultfd fd itself; the nns_app domain has no
+    # self anon_inode rule (and ksud's sepolicy parser cannot express one),
+    # which killed app_process before its first log line. Forcing the
+    # semispace collector skips the concurrent-copying collector and its
+    # uffd dependency entirely.
+    exec /system/bin/app_process -Xgc:SS -Djava.class.path="$dst" /system/bin \
       --nice-name=rish rikka.shizuku.shell.ShizukuShellLoader "$@"
   '';
   nnsSu = pkgs.writeScript "nns-su" /* sh */ ''

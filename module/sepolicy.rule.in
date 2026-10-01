@@ -204,4 +204,10 @@ dontaudit nns_app untrusted_app_all_devpts chr_file ioctl
 # unprivileged user namespace the self-labeled create is denied, which killed
 # app_process before its first log line (silent rish / su failures with the
 # server healthy). My root, mount-only debug chains never took this path.
+# INERT as of 2026-10-01: ksud's sepolicy applier silently drops anon_inode
+# class statements (apply/check/patch all refuse it; boot-time file apply
+# verified dropping it while sibling rules from this file land). The working
+# fix is runtime-level: the rish wrapper forces `-Xgc:SS` so ART never uses
+# the concurrent-copying collector and its uffd dependency. This rule stays
+# for the day ksud learns the class.
 allow nns_app nns_app:anon_inode { create getattr ioctl map open read write }

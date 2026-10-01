@@ -1,4 +1,8 @@
-{ lib, stdenvNoCC, launcher, dns, policy, zip, python3, arch ? "arm64" }:
+{ lib, stdenvNoCC, launcher, dns, policy, zip, python3, arch ? "arm64",
+  # Assigned per install; supply the host's app uid/gid, e.g.
+  # mkModule { appUid = ...; appGid = ...; } in outputs.nix.
+  appUid ? throw "nix/module.nix: appUid not supplied; pass the host's Android app uid",
+  appGid ? throw "nix/module.nix: appGid not supplied; pass the host's Android app gid" }:
 stdenvNoCC.mkDerivation {
   pname = "nns-module-${arch}";
   version = "3.1.0";
@@ -27,6 +31,10 @@ stdenvNoCC.mkDerivation {
     cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh module/
     cp ${policy} module/sepolicy.rule
     substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
+    # The app uid/gid is assigned per install; defaults keep cheetah's
+    # values, other phones override via nns-module.override.
+    substituteInPlace module/post-fs-data.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}'
+    substituteInPlace module/stage-etc.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}'
     cp etc/profile module/etc/
     cp etc/nix/nix.conf module/etc/nix/
     touch module/skip_mount

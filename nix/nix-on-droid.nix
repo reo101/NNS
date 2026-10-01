@@ -82,11 +82,19 @@ let
   nnsRish = pkgs.writeScript "nns-rish" /* sh */ ''
     #!${pkgs.runtimeShell}
     # No service-list or pidof preflight: neither reliably sees Shizuku here.
+    # The store dex cannot be opened from inside the launcher namespace and
+    # app_process refuses dex it could write (Android 14+), so both cases use
+    # an app-owned read-only copy.
+    dst="${config.user.home}/.rish/rish.dex"
+    /system/bin/mkdir -p "${config.user.home}/.rish"
+    /system/bin/rm -f "$dst"
+    /system/bin/cp ${rishDex} "$dst"
+    /system/bin/chmod 444 "$dst"
     export RISH_APPLICATION_ID=com.termux.nix
     export NNS_RISH_PROPERTY_INFO_SHIM=1
     export LD_PRELOAD=/data/nix/lib/libnns-dns.so
     export PATH=/bin:/system/bin
-    exec /system/bin/app_process -Djava.class.path="${rishDex}" /system/bin \
+    exec /system/bin/app_process -Djava.class.path="$dst" /system/bin \
       --nice-name=rish rikka.shizuku.shell.ShizukuShellLoader "$@"
   '';
   nnsSu = pkgs.writeScript "nns-su" /* sh */ ''
@@ -260,6 +268,47 @@ let
     }}"
     else "";
 
+  # One handler pair per managed ~/.termux file. The terminal UI resolves
+  # these outside the launcher namespace and termux's loaders only accept
+  # regular files (symlinks are ignored), so the source is copied into
+  # app-owned storage under nns-<name> and reached through a local symlink
+  # - the same shape for font, colors and properties. `option` names the
+  # activation keys (linkFont/unlinkFont, ...); a null source selects the
+  # unlink side.
+  managedTermuxFile = { option, name, source }:
+    let
+      dir = "${config.user.home}/.termux";
+      stored = "${dir}/nns-${name}";
+      target = "${dir}/${name}";
+    in
+    if source != null then {
+      "link${option}" = /* bash */ ''
+        $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${dir}"
+        if [ -e "${target}" ] && ! [ -L "${target}" ]; then
+          $DRY_RUN_CMD mv $VERBOSE_ARG "${target}" "${target}.bak"
+        fi
+        if [ ! -e "${stored}" ]; then
+          $DRY_RUN_CMD cp $VERBOSE_ARG "${source}" "${stored}"
+        elif ! cmp -s "${source}" "${stored}"; then
+          $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${stored}"
+          $DRY_RUN_CMD cp $VERBOSE_ARG "${source}" "${stored}"
+          $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${stored}"
+        fi
+        if [ "$(readlink "${target}")" != "${stored}" ]; then
+          $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${stored}" "${target}"
+        fi
+      '';
+    } else {
+      "unlink${option}" = /* bash */ ''
+        if [ -L "${target}" ]; then
+          if [ "$(readlink "${target}")" = "${stored}" ]; then
+            $DRY_RUN_CMD rm $VERBOSE_ARG -f "${stored}"
+          fi
+          $DRY_RUN_CMD rm $VERBOSE_ARG "${target}"
+        fi
+      '';
+    };
+
   # ---- nns.services: declarative runit services supervised at boot ----
 
   # State lives in DE space: service dirs are materialized by activation
@@ -346,7 +395,7 @@ let
   '';
 
   sshdConfig = pkgs.writeText "nns-sshd_config" /* ssh-config */ ''
-    Port ${toString sshdCfg.port}
+    Port ${builtins.toString sshdCfg.port}
     ListenAddress ${sshdCfg.listenAddress}
 
     HostKey ${sshdStateDir}/ssh_host_ed25519_key
@@ -394,7 +443,7 @@ let
       mkdir -p ${sshdStateDir} /data/nix/tmp
       if [ ! -f ${sshdStateDir}/ssh_host_ed25519_key ]; then
         ssh-keygen -t ed25519 -N "" -f ${sshdStateDir}/ssh_host_ed25519_key
-        chown 10578:10578 ${sshdStateDir}/ssh_host_ed25519_key* || true
+        chown ${builtins.toString config.user.uid}:${builtins.toString config.user.gid} ${sshdStateDir}/ssh_host_ed25519_key{,.pub} || true
       fi
 
       for f in $(${lib.getExe' pkgs.gnugrep "grep"} -rl -a /var/empty ${pkgs.openssh} 2>/dev/null); do
@@ -556,7 +605,7 @@ in
           message = "nns.services.services.${name}: invalid environment variable name";
         }
         {
-          assertion = !service.nns.enable || service.process.argv != [ ];
+          assertion = service.nns.enable -> service.process.argv != [ ];
           message = "nns.services.services.${name}: process.argv must name an executable";
         }
         {
@@ -644,7 +693,7 @@ in
 
         setUpEtc = /* bash */ ''
           $DRY_RUN_CMD bash ${etcScript} \
-            ${toString config.environment.etcBackupExtension}
+            ${builtins.toString config.environment.etcBackupExtension}
         '';
 
         installPackages = installPackagesStep;
@@ -654,107 +703,19 @@ in
         createDevShm = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/dev/shm
         '';
-      } // lib.optionalAttrs (config.terminal.font != null) {
-        # The Android terminal UI runs outside the launcher's mount namespace,
-        # so its font symlink must resolve within app-owned storage, not /nix.
-        linkFont = /* bash */ ''
-          $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
-          if [ -e "${config.user.home}/.termux/font.ttf" ] && ! [ -L "${config.user.home}/.termux/font.ttf" ]; then
-            $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/font.ttf" \
-              "${config.user.home}/.termux/font.ttf.bak"
-          fi
-          if [ ! -e "${config.user.home}/.termux/nns-font.ttf" ]; then
-            $DRY_RUN_CMD cp $VERBOSE_ARG "${config.terminal.font}" \
-              "${config.user.home}/.termux/nns-font.ttf"
-          elif ! cmp -s "${config.terminal.font}" "${config.user.home}/.termux/nns-font.ttf"; then
-            $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${config.user.home}/.termux/nns-font.ttf"
-            $DRY_RUN_CMD cp $VERBOSE_ARG "${config.terminal.font}" \
-              "${config.user.home}/.termux/nns-font.ttf"
-            $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${config.user.home}/.termux/nns-font.ttf"
-          fi
-          if [ "$(readlink "${config.user.home}/.termux/font.ttf")" != "${config.user.home}/.termux/nns-font.ttf" ]; then
-            $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.user.home}/.termux/nns-font.ttf" \
-              "${config.user.home}/.termux/font.ttf"
-          fi
-        '';
-      } // lib.optionalAttrs (config.terminal.colors != { }) {
-        # Same rule as linkProperties: the loader ignores symlinks, so the
-        # rendered colors are copied into app-owned storage and linked
-        # locally.
-        linkColors = /* bash */ ''
-          $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
-          if [ -e "${config.user.home}/.termux/colors.properties" ] && ! [ -L "${config.user.home}/.termux/colors.properties" ]; then
-            $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/colors.properties" \
-              "${config.user.home}/.termux/colors.properties.bak"
-          fi
-          if [ ! -e "${config.user.home}/.termux/nns-colors.properties" ]; then
-            $DRY_RUN_CMD cp $VERBOSE_ARG "${colorsPath}" \
-              "${config.user.home}/.termux/nns-colors.properties"
-          elif ! cmp -s "${colorsPath}" "${config.user.home}/.termux/nns-colors.properties"; then
-            $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${config.user.home}/.termux/nns-colors.properties"
-            $DRY_RUN_CMD cp $VERBOSE_ARG "${colorsPath}" \
-              "${config.user.home}/.termux/nns-colors.properties"
-            $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${config.user.home}/.termux/nns-colors.properties"
-          fi
-          if [ "$(readlink "${config.user.home}/.termux/colors.properties")" != "${config.user.home}/.termux/nns-colors.properties" ]; then
-            $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.user.home}/.termux/nns-colors.properties" \
-              "${config.user.home}/.termux/colors.properties"
-          fi
-        '';
-      } // lib.optionalAttrs (config.terminal.properties != { }) {
-        # The terminal UI only accepts a regular file here: termux's properties
-        # loader explicitly ignores symlinks (2022 hardening), so copy the
-        # rendered store file into app-owned storage and link locally, the
-        # same way the font is handled.
-        linkProperties = /* bash */ ''
-          $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${config.user.home}/.termux"
-          if [ -e "${config.user.home}/.termux/termux.properties" ] && ! [ -L "${config.user.home}/.termux/termux.properties" ]; then
-            $DRY_RUN_CMD mv $VERBOSE_ARG "${config.user.home}/.termux/termux.properties" \
-              "${config.user.home}/.termux/termux.properties.bak"
-          fi
-          if [ ! -e "${config.user.home}/.termux/nns-termux.properties" ]; then
-            $DRY_RUN_CMD cp $VERBOSE_ARG "${propertiesPath}" \
-              "${config.user.home}/.termux/nns-termux.properties"
-          elif ! cmp -s "${propertiesPath}" "${config.user.home}/.termux/nns-termux.properties"; then
-            $DRY_RUN_CMD chmod $VERBOSE_ARG u+w "${config.user.home}/.termux/nns-termux.properties"
-            $DRY_RUN_CMD cp $VERBOSE_ARG "${propertiesPath}" \
-              "${config.user.home}/.termux/nns-termux.properties"
-            $DRY_RUN_CMD chmod $VERBOSE_ARG u-w "${config.user.home}/.termux/nns-termux.properties"
-          fi
-          if [ "$(readlink "${config.user.home}/.termux/termux.properties")" != "${config.user.home}/.termux/nns-termux.properties" ]; then
-            $DRY_RUN_CMD ln $VERBOSE_ARG -sf "${config.user.home}/.termux/nns-termux.properties" \
-              "${config.user.home}/.termux/termux.properties"
-          fi
-        '';
-      } // (lib.optionalAttrs (config.terminal.font == null) {
-        unlinkFont = /* bash */ ''
-          if [ -L "${config.user.home}/.termux/font.ttf" ]; then
-            if [ "$(readlink "${config.user.home}/.termux/font.ttf")" = "${config.user.home}/.termux/nns-font.ttf" ]; then
-              $DRY_RUN_CMD rm $VERBOSE_ARG -f "${config.user.home}/.termux/nns-font.ttf"
-            fi
-            $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/font.ttf"
-          fi
-        '';
-      }) // (lib.optionalAttrs (config.terminal.colors == { }) {
-        unlinkColors = /* bash */ ''
-          if [ -L "${config.user.home}/.termux/colors.properties" ]; then
-            if [ "$(readlink "${config.user.home}/.termux/colors.properties")" = "${config.user.home}/.termux/nns-colors.properties" ]; then
-              $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/nns-colors.properties"
-            fi
-            $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/colors.properties"
-          fi
-        '';
-      }) // (lib.optionalAttrs (config.terminal.properties == { }) {
-        # Only remove links the module made; foreign symlinks stay.
-        unlinkProperties = /* bash */ ''
-          if [ -L "${config.user.home}/.termux/termux.properties" ]; then
-            if [ "$(readlink "${config.user.home}/.termux/termux.properties")" = "${config.user.home}/.termux/nns-termux.properties" ]; then
-              $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/nns-termux.properties"
-            fi
-            $DRY_RUN_CMD rm $VERBOSE_ARG "${config.user.home}/.termux/termux.properties"
-          fi
-        '';
-      }) // lib.optionalAttrs (cfg.services.enable) {
+      } // managedTermuxFile {
+        option = "Font";
+        name = "font.ttf";
+        source = if config.terminal.font != null then "${config.terminal.font}" else null;
+      } // managedTermuxFile {
+        option = "Colors";
+        name = "colors.properties";
+        source = if config.terminal.colors != { } then colorsPath else null;
+      } // managedTermuxFile {
+        option = "Properties";
+        name = "termux.properties";
+        source = if config.terminal.properties != { } then propertiesPath else null;
+      } // lib.optionalAttrs (cfg.services.enable) {
         # Materialize service run scripts as symlinks into the closure (dry-run
         # friendly, atomic replaces) and render sshd's config the same way.
         # No interaction with a live runsvdir: run scripts are read at each

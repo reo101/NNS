@@ -18,6 +18,8 @@ let
           nns.services.services.example = service;
           user.home = "/data/data/com.termux.nix/files/home";
           user.userName = "nix";
+          user.uid = 10578;
+          user.gid = 10578;
           user.shell = "/system/bin/sh";
           build.installationDir = "/data/data/com.termux.nix/files";
           build.sessionInit = "/nix/etc";

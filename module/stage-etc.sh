@@ -101,7 +101,7 @@ for crit in group passwd; do
   else
     printf '%s\n%s\n' \
       'root:x:0:0::/root:/system/bin/sh' \
-      'nix-on-droid:x:10578:10578::/data/data/com.termux.nix/files/home:/system/bin/sh' \
+      'nix-on-droid:x:@APP_UID@:@APP_GID@::/data/data/com.termux.nix/files/home:/system/bin/sh' \
       > "$etc/$crit"
   fi
 done

@@ -42,7 +42,13 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         };
         policy = pkgs.callPackage ./nix/sepolicy.nix { };
         policyCandidates = pkgs.callPackage ./nix/sepolicy-candidates.nix { };
-        module = pkgs.callPackage ./nix/module.nix { inherit launcher dns policy; };
+        # nix/module.nix has no uid/gid defaults: every build names them
+        # (mkModule without appUid/appGid errors out). This is cheetah's
+        # pair (meta.uid/meta.gid); other phones call mkModule with their
+        # own.
+        mkModule = { arch ? "arm64", launcher, dns, appUid, appGid }:
+          pkgs.callPackage ./nix/module.nix { inherit arch appUid appGid launcher dns policy; };
+        moduleCheetah = mkModule { inherit launcher dns; appUid = 10578; appGid = 10578; };
         androidTestPkgs = import inputs.nixpkgs {
           inherit system;
           config = { allowUnfree = true; android_sdk.accept_license = true; };
@@ -71,7 +77,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           stockKernel = stockAndroidKernel;
         };
         dnsX86 = dns.override { arch = "x86_64"; };
-        moduleX86 = module.override { launcher = hostLauncher; dns = dnsX86; arch = "x64"; };
+        moduleX86 = mkModule { launcher = hostLauncher; dns = dnsX86; arch = "x64"; appUid = 10578; appGid = 10578; };
         androidTest = import ./nix/android-vm-test.nix {
           inherit pkgs lib sources;
           androidSdk = androidTestSdk;
@@ -84,14 +90,14 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           name = "nns-test-userns";
           runtimeInputs = [ pkgs.python3 ];
           text = ''
-            exec python3 ${./tests/test-userns.py} ${hostLauncher}/bin/nix-enter "$@"
+            exec python3 ${./tests/test-userns.py} ${lib.getExe hostLauncher} "$@"
           '';
         };
         emacsTest = pkgs.writeShellApplication {
           name = "nns-test-emacs";
           runtimeInputs = [ pkgs.python3 ];
           text = ''
-            exec python3 ${./tests/test-emacs.py} ${hostLauncher}/bin/nix-enter \
+            exec python3 ${./tests/test-emacs.py} ${lib.getExe hostLauncher} \
               ${pkgs.emacs-nox}/bin/emacs ${emacs}/share/emacs/site-lisp \
               ${./tests/nns-integration-test.el}
           '';
@@ -107,8 +113,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           mkdir -p "$out/bin"
           ln -s ${kernel} "$out/kernel"
           ln -s ${sources.sukisuManager} "$out/SukiSU-manager.apk"
-          ln -s ${module}/nns-module.zip "$out/nns-module.zip"
-          ln -s ${module}/module "$out/module"
+          ln -s ${moduleCheetah}/nns-module.zip "$out/nns-module.zip"
+          ln -s ${moduleCheetah}/module "$out/module"
           ln -s ${emacs}/nns-emacs.zip "$out/nns-emacs.zip"
           ln -s ${emacs}/share/emacs/site-lisp "$out/emacs-lisp"
           ln -s ${repacker}/bin/nns-repack-boot "$out/bin/nns-repack-boot"
@@ -116,7 +122,10 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
       in
       {
         packages = {
-          nns-module = module;
+          # No unsupplied nns-module here: nix/module.nix requires appUid/
+          # appGid, so every zip output names its host and callers with
+          # other ids use module.override.
+          nns-module-cheetah = moduleCheetah;
           nns-sepolicy = policy;
           nns-sepolicy-candidates = policyCandidates;
           sukisu-manager = sources.sukisuManager;
@@ -144,7 +153,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         };
         checks = {
           nns-dns = dns;
-          nns-module = module;
+          nns-module = moduleCheetah;
           nns-modular-services =
             assert import ./tests/test-modular-services.nix { inherit pkgs; };
             pkgs.runCommand "check-nns-modular-services" { } "touch $out";

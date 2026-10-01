@@ -93,8 +93,11 @@ fi
 # are provisioned from staged NSS in service.sh, after stage-etc runs).
 mkdir -p /data/nix/var/nns/services /data/nix/var/nns/ready \
   /data/nix/var/nns/bin /data/nix/var/sshd /data/ve/etc
-chown 10578:10578 /data/nix/var/nns/services /data/nix/var/nns/bin /data/nix/var/sshd
-chcon u:object_r:app_data_file:s0:c66,c258,c512,c768 /data/nix/var/nns/services
+chown @APP_UID@:@APP_GID@ /data/nix/var/nns/services /data/nix/var/nns/bin /data/nix/var/sshd
+# The app's SELinux categories derive from its uid (c66,... above = uid
+# 10578); mirror the app data dir's live context instead of hardcoding it.
+chcon "$(ls -Zd /data/data/com.termux.nix | tr -s ' ' | cut -d ' ' -f 1)" \
+  /data/nix/var/nns/services
 chcon u:object_r:system_data_file:s0 /data/nix/var/sshd
 chmod 755 /data/ve /data/ve/etc
 # Boot reset, same class as the daemon pidfile: readiness markers and runsv

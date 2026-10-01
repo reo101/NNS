@@ -13,5 +13,8 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     install -Dm755 nix-enter "$out/bin/nix-enter"
   '';
-  meta.description = "Static identity-preserving user/mount namespace launcher for canonical /nix";
+  meta = {
+    mainProgram = "nix-enter";
+    description = "Static identity-preserving user/mount namespace launcher for canonical /nix";
+  };
 }

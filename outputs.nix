@@ -41,14 +41,15 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           androidToolchain = androidPkgs.stdenv.cc.cc;
         };
         policy = pkgs.callPackage ./nix/sepolicy.nix { };
+        rish = pkgs.callPackage ./nix/rish.nix { };
         policyCandidates = pkgs.callPackage ./nix/sepolicy-candidates.nix { };
-        # nix/module.nix has no uid/gid defaults: every build names them
-        # (mkModule without appUid/appGid errors out). This is cheetah's
+        # nix/module.nix has no uid/gid/appId defaults: every build names them
+        # (mkModule without appUid/appGid/appId errors out). This is cheetah's
         # pair (meta.uid/meta.gid); other phones call mkModule with their
         # own.
-        mkModule = { arch ? "arm64", launcher, dns, appUid, appGid }:
-          pkgs.callPackage ./nix/module.nix { inherit arch appUid appGid launcher dns policy; };
-        moduleCheetah = mkModule { inherit launcher dns; appUid = 10578; appGid = 10578; };
+        mkModule = { arch ? "arm64", launcher, dns, rish, appUid, appGid, appId }:
+          pkgs.callPackage ./nix/module.nix { inherit arch appUid appGid appId launcher dns rish policy; };
+        moduleCheetah = mkModule { inherit launcher dns rish; appUid = 10578; appGid = 10578; appId = "com.termux.nix"; };
         androidTestPkgs = import inputs.nixpkgs {
           inherit system;
           config = { allowUnfree = true; android_sdk.accept_license = true; };
@@ -77,7 +78,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           stockKernel = stockAndroidKernel;
         };
         dnsX86 = dns.override { arch = "x86_64"; };
-        moduleX86 = mkModule { launcher = hostLauncher; dns = dnsX86; arch = "x64"; appUid = 10578; appGid = 10578; };
+        moduleX86 = mkModule { launcher = hostLauncher; dns = dnsX86; inherit rish; arch = "x64"; appUid = 10578; appGid = 10578; appId = "com.termux.nix"; };
         androidTest = import ./nix/android-vm-test.nix {
           inherit pkgs lib sources;
           androidSdk = androidTestSdk;

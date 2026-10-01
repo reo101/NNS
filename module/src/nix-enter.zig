@@ -108,6 +108,33 @@ fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u
             env = entries.ptr;
         }
     }
+    // Every session gets the module's helper binaries (su/sudo/rish)
+    // ahead of the inherited PATH. /data/nix/var/nns/bin is already the
+    // first sessionPath entry for NoD-managed sessions; this covers bare
+    // `nix-enter -- <cmd>` sessions whose caller PATH lacks it.
+    {
+        const helpers = "/data/nix/var/nns/bin";
+        const previous = init.environ_map.get("PATH") orelse "";
+        var present = false;
+        var tokens = std.mem.tokenizeAny(u8, previous, ":");
+        while (tokens.next()) |token| {
+            if (std.mem.eql(u8, token, helpers)) present = true;
+        }
+        if (!present) {
+            const entry = std.fmt.allocPrintSentinel(init.gpa, "PATH={s}{s}{s}",
+                .{ helpers, if (previous.len == 0) "" else ":", previous }, 0) catch @panic("out of memory");
+            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 1, null) catch @panic("out of memory");
+            var count: usize = 0;
+            for (std.mem.span(env)) |item| {
+                if (std.mem.startsWith(u8, std.mem.span(item.?), "PATH=")) continue;
+                entries[count] = item;
+                count += 1;
+            }
+            entries[count] = entry.ptr;
+            entries[count + 1] = null;
+            env = entries.ptr;
+        }
+    }
     if (std.mem.indexOfScalar(u8, std.mem.span(args[0]), '/') == null) {
         var dirs = std.mem.splitScalar(u8, init.environ_map.get("PATH") orelse "/system/bin:/bin:/usr/bin", ':');
         var buf: [4096]u8 = undefined;

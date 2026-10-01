@@ -10,8 +10,8 @@ machine = {'arm64': 183, 'x64': 62}[arch]
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
     required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'skip_mount',
-                'sepolicy.rule', 'bin/nix-enter', 'bin/nns-resolver',
-                'lib/libnns-dns.so', 'etc/profile', 'etc/nix/nix.conf'}
+                'sepolicy.rule', 'bin/nix-enter', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo',
+                'bin/rish-probe', 'lib/libnns-dns.so', 'lib/rish.dex', 'etc/profile', 'etc/nix/nix.conf'}
     assert names == required, names ^ required
     assert z.testzip() is None
     assert 'id=nix\n' in z.read('module.prop').decode()
@@ -23,10 +23,17 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     for name in names:
         assert not Path(name).is_absolute() and '..' not in Path(name).parts
         assert z.getinfo(name).date_time == (1980, 1, 1, 0, 0, 0)
-    for name in ('bin/nix-enter', 'bin/nns-resolver', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh'):
+    for name in ('bin/nix-enter', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe',
+                 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh'):
         assert (z.getinfo(name).external_attr >> 16) & stat.S_IXUSR, name
-    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh'):
+    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh',
+                 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe'):
         assert z.read(name).startswith(b'#!/system/bin/sh\n')
+        assert b'@APP_' not in z.read(name), name
+    for name in ('bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe'):
+        assert b'/nix/store' not in z.read(name), name
+    dex = z.read('lib/rish.dex')
+    assert dex[:4] == b'dex\n'
     elf = z.read('bin/nix-enter')
     assert elf[:6] == b'\x7fELF\x02\x01'
     assert struct.unpack_from('<H', elf, 18)[0] == machine, arch

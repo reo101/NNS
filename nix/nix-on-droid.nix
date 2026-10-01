@@ -73,44 +73,9 @@ let
     ];
   }).serviceSubmodule;
 
-  rishDex = pkgs.runCommand "nns-rish-shizuku.dex" { nativeBuildInputs = [ pkgs.unzip ]; } ''
-    unzip -p ${pkgs.fetchurl {
-      url = "https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/shizuku-v13.6.0.r1086.2650830c-release.apk";
-      hash = "sha256-bic6sOmRxOebyLG7ubndc5zKwahxKlQaIUB4iGt7eQ8=";
-    }} assets/rish_shizuku.dex > "$out"
-  '';
-  nnsRish = pkgs.writeScript "nns-rish" /* sh */ ''
-    #!${pkgs.runtimeShell}
-    # No service-list or pidof preflight: neither reliably sees Shizuku here.
-    # The store dex cannot be opened from inside the launcher namespace and
-    # app_process refuses dex it could write (Android 14+), so both cases use
-    # an app-owned read-only copy.
-    dst="${config.user.home}/.rish/rish.dex"
-    /system/bin/mkdir -p "${config.user.home}/.rish"
-    /system/bin/rm -f "$dst"
-    /system/bin/cp ${rishDex} "$dst"
-    /system/bin/chmod 444 "$dst"
-    export RISH_APPLICATION_ID=com.termux.nix
-    export NNS_RISH_PROPERTY_INFO_SHIM=1
-    export LD_PRELOAD=/data/nix/lib/libnns-dns.so
-    export PATH=/bin:/system/bin
-    # Launcher sessions run in an unprivileged userns with no zygote parent,
-    # so ART must create the userfaultfd fd itself; the nns_app domain has no
-    # self anon_inode rule (and ksud's sepolicy parser cannot express one),
-    # which killed app_process before its first log line. Forcing the
-    # semispace collector skips the concurrent-copying collector and its
-    # uffd dependency entirely.
-    exec /system/bin/app_process -Xgc:SS -Djava.class.path="$dst" /system/bin \
-      --nice-name=rish rikka.shizuku.shell.ShizukuShellLoader "$@"
-  '';
-  nnsSu = pkgs.writeScript "nns-su" /* sh */ ''
-    #!${pkgs.runtimeShell}
-    exec "$HOME/.nns-bin/rish" "$@"
-  '';
-  nnsSudo = pkgs.writeScript "nns-sudo" /* sh */ ''
-    #!${pkgs.runtimeShell}
-    exec "$HOME/.nns-bin/rish" -c "$*"
-  '';
+  # su/sudo/rish ship via the module (nix/rish.nix) into
+  # /data/nix/var/nns/bin and work in any nix-enter session; nothing is
+  # needed NoD-side.
 
   # Sourced by the login shell; sets PATH (nix-on-droid-path), session
   # variables and home-manager environment from the user profile.
@@ -131,12 +96,6 @@ let
     # NoD's dnshack resolver expects proot's removed /android mapping.
     # Use the NNS Bionic resolver and terminal shim for every login session.
     export LD_PRELOAD=/data/nix/lib/libnns-dns.so
-
-    mkdir -p "$HOME/.nns-bin"
-    ln -sf "${nnsRish}" "$HOME/.nns-bin/rish"
-    ln -sf "${nnsSu}" "$HOME/.nns-bin/su"
-    ln -sf "${nnsSudo}" "$HOME/.nns-bin/sudo"
-    export PATH="$HOME/.nns-bin:$PATH"
 
     if [ "$#" -gt 0 ]; then
       exec "$@"

@@ -100,6 +100,29 @@ chcon "$(ls -Zd /data/data/com.termux.nix | tr -s ' ' | cut -d ' ' -f 1)" \
   /data/nix/var/nns/services
 chcon u:object_r:system_data_file:s0 /data/nix/var/sshd
 chmod 755 /data/ve /data/ve/etc
+
+# Shizuku-backed su/sudo/rish for every launcher session. /data/nix/var/nns/bin
+# is already the first sessionPath entry and nix-enter prepends it for bare
+# sessions, so no NoD login is required. The dex rides in the module (no store
+# path baked into the scripts); the staged app-id gives the wrappers their
+# per-host default while NNS_APPLICATION_ID overrides per invocation.
+for artifact in rish su sudo rish-probe; do
+  rm -f "/data/nix/var/nns/bin/$artifact.new"
+  cp "$MODDIR/bin/$artifact" "/data/nix/var/nns/bin/$artifact.new" || exit 1
+  chmod 755 "/data/nix/var/nns/bin/$artifact.new"
+  chown 0:0 "/data/nix/var/nns/bin/$artifact.new"
+  chcon u:object_r:system_data_file:s0 "/data/nix/var/nns/bin/$artifact.new" || exit 1
+  mv -f "/data/nix/var/nns/bin/$artifact.new" "/data/nix/var/nns/bin/$artifact"
+done
+rm -f /data/nix/lib/rish.dex.new
+cp "$MODDIR/lib/rish.dex" /data/nix/lib/rish.dex.new || exit 1
+chmod 444 /data/nix/lib/rish.dex.new
+chown 0:0 /data/nix/lib/rish.dex.new
+chcon u:object_r:system_data_file:s0 /data/nix/lib/rish.dex.new || exit 1
+mv -f /data/nix/lib/rish.dex.new /data/nix/lib/rish.dex
+printf '%s\n' '@APP_ID@' > /data/nix/etc/app-id
+chown 0:0 /data/nix/etc/app-id
+chmod 644 /data/nix/etc/app-id
 # Boot reset, same class as the daemon pidfile: readiness markers and runsv
 # control state never survive a boot - a stale 'unlock' marker would let
 # startAt=unlock services race CE, stale supervise pids recycle like the

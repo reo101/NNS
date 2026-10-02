@@ -29,11 +29,6 @@ export NIX_STATE_DIR=/nix/var/nix
 export NIX_CONF_DIR=/data/nix/etc/nix
 export NIX_BUILD_HOOK=
 
-# ca bundle will come from the nix closure once seeded
-if [ -f /nix/etc/ssl/certs/ca-bundle.crt ]; then
-  export SSL_CERT_FILE=/nix/etc/ssl/certs/ca-bundle.crt
-fi
-
 for f in /data/nix/etc/profile.d/*.sh; do
   [ -f "$f" ] && . "$f"
 done

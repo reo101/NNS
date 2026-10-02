@@ -26,6 +26,8 @@ phonePkgs.buildEnv {
       findutils
     ] ++ extraPaths;
   postBuild = ''
+    # Device-side profile switching, shipped in the profile itself.
+    cp -r ${import ./system-profile-switch.nix { inherit phonePkgs; }}/bin/. $out/bin/
     # Older generated run scripts exec `nix-daemon` directly; nix ships it,
     # but fail loudly at build time rather than at boot if that ever moves.
     [ -x "$out/bin/nix-daemon" ] || {

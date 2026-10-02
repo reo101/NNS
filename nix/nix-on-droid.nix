@@ -308,7 +308,7 @@ let
   # Profile directories visible both inside launcher namespaces (via /nix)
   # and from the app-owned /data tree; service scripts and ssh sessions share
   # them.
-  sessionPath = "/data/nix/var/nns/bin:/nix/var/nix/profiles/profile/bin:${config.user.home}/.nix-profile/bin:/system/bin:/system/xbin";
+  sessionPath = "/data/nix/var/nns/bin:/nix/var/nix/profiles/system-profile/bin:${config.user.home}/.nix-profile/bin:/system/bin:/system/xbin";
 
   servicePreamble = /* bash */ ''
     #!/system/bin/sh
@@ -594,7 +594,7 @@ in
       process.argv = [
         "${lib.getExe pkgs.socat}"
         "VSOCK-LISTEN:15555,fork"
-        "SYSTEM:/nix/var/nix/profiles/default/bin/nix-daemon --stdio"
+        "SYSTEM:/nix/var/nix/profiles/system-profile/bin/nix-daemon --stdio"
       ];
     };
 

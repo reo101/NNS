@@ -79,6 +79,18 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         };
         dnsX86 = dns.override { arch = "x86_64"; };
         moduleX86 = mkModule { launcher = hostLauncher; dns = dnsX86; inherit rish; arch = "x64"; appUid = 10578; appGid = 10578; appId = "com.termux.nix"; };
+        # The phone platform, for the system profile and its deploy app.
+        phonePkgs = import inputs.nixpkgs {
+          localSystem = system;
+          crossSystem = lib.systems.examples.aarch64-multiplatform;
+        };
+        systemProfile = pkgs.callPackage ./nix/system-profile.nix { inherit phonePkgs; };
+        deploySystemProfile = pkgs.callPackage ./nix/system-profile-deploy.nix {
+          inherit systemProfile;
+          sshUser = "nix-on-droid";
+          sshHost = "192.168.1.217";
+          sshPort = 8022;
+        };
         androidTest = import ./nix/android-vm-test.nix {
           inherit pkgs lib sources;
           androidSdk = androidTestSdk;
@@ -143,6 +155,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           kernel-android-test = androidTestKernel;
           android-test-sdk = androidTestSdk;
           nns-module-x86_64 = moduleX86;
+          nns-system-profile = systemProfile;
           test-android = androidTest.driver;
           android-vm-test = androidTest;
           android-test-apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
@@ -180,6 +193,10 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           };
         };
         formatter = pkgs.nixfmt;
+      } // lib.optionalAttrs (system == "x86_64-linux") {
+        apps = {
+          deploy-system-profile.program = lib.getExe deploySystemProfile;
+        };
       };
   }
 )

@@ -28,8 +28,8 @@ find /data/nix/var/nix/profiles -maxdepth 1 -type l \
 # resolves its interpreter and libraries; the socket it creates is backed
 # by /data/nix/var/nix/daemon-socket/socket, the same file app sessions
 # reach as /nix/var/nix/daemon-socket/socket through their launcher view.
-PROFILE=/data/nix/var/nix/profiles/profile
-NIX=/nix/var/nix/profiles/profile/bin/nix
+PROFILE=/data/nix/var/nix/profiles/system-profile
+NIX=/nix/var/nix/profiles/system-profile/bin/nix
 PIDFILE=/data/nix/var/nix/daemon.pid
 # The daemon resolves trusted-users (@group) against its OWN /etc, which
 # the staged tree provides with the nix-trusted group; see stage-etc.sh.

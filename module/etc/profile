@@ -5,7 +5,7 @@
 # are layered on top by their own login entry points.
 
 export NIX_PROFILE=/nix/var/nix/profiles/system-profile
-export PATH=$NIX_PROFILE/bin:/nix/var/nix/profiles/profile/bin:$PATH
+export PATH=$NIX_PROFILE/bin:$PATH
 
 # per-session tmpfs, wiped on exit
 export TMPDIR=/nix/tmp

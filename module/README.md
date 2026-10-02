@@ -170,7 +170,6 @@ repointing `system-profile`):
 ```sh
 ln -sfn <env-store-path> /nix/var/nix/profiles/system-profile-1-link
 ln -sfn system-profile-1-link /nix/var/nix/profiles/system-profile
-ln -sfn system-profile /nix/var/nix/profiles/profile
 ```
 
 `/data/nix/etc/profile` sources on session start (`nix-enter sh -c '. /data/nix/etc/profile; …'`);

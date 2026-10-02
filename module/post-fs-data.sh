@@ -131,7 +131,7 @@ rm -f /data/nix/var/nns/ready/*
 rm -rf /data/nix/var/nns/services/*/supervise
 
 # nix store gc keeps only what is reachable from /nix/var/nix/gcroots.
-# The bootstrap profile links (default-1, nix-on-droid generations) are
+# The profile links (system-profile, nix-on-droid generations) are
 # created manually and would be collected otherwise - root the whole
 # profiles directory once; every link inside it is then protected.
 if [ ! -e /data/nix/var/nix/gcroots/profiles ]; then

@@ -13,7 +13,7 @@
 set -eu
 
 etc=/data/nix/var/daemon-etc
-nod_etc=/data/data/com.termux.nix/files/usr/etc
+nod_etc=/data/data/@APP_ID@/files/usr/etc
 
 # Resolve symlink chains by hand: toybox cp -L does not dereference, and
 # store targets (/nix/store/...) only exist on the host as /data/nix/store/...
@@ -101,7 +101,7 @@ for crit in group passwd; do
   else
     printf '%s\n%s\n' \
       'root:x:0:0::/root:/system/bin/sh' \
-      'nix-on-droid:x:@APP_UID@:@APP_GID@::/data/data/com.termux.nix/files/home:/system/bin/sh' \
+      'nix-on-droid:x:@APP_UID@:@APP_GID@::/data/data/@APP_ID@/files/home:/system/bin/sh' \
       > "$etc/$crit"
   fi
 done
@@ -109,11 +109,20 @@ done
 grep -q '^nix-trusted:' "$etc/group" ||
   echo 'nix-trusted:x:30000:nix-on-droid' >> "$etc/group"
 
+# glibc processes in launcher namespaces (the daemon, sshd) resolve via
+# /etc/resolv.conf - the bionic bridge only covers preloaded sessions.
+# Derive the default gateway at stage time; a public fallback keeps
+# setups where the gateway does not answer DNS working.
+if [ ! -f "$etc/resolv.conf" ]; then
+  gw=$(/system/bin/ip route 2>/dev/null | awk '/default/ {print $3; exit}')
+  printf 'nameserver %s\nnameserver 1.1.1.1\n' "${gw:-1.1.1.1}" > "$etc/resolv.conf"
+fi
+
 if [ -f /data/nix/etc/nss-trusted ]; then
   while IFS=: read -r name uid gid _rest; do
     case "$name" in '' | '#'*) continue ;; esac
     grep -q "^$name:" "$etc/passwd" ||
-      echo "$name:x:$uid:$gid:NNS trusted app:/data/data/com.termux.nix/files/home:/system/bin/sh" >> "$etc/passwd"
+      echo "$name:x:$uid:$gid:NNS trusted app:/data/data/$name/files/home:/system/bin/sh" >> "$etc/passwd"
     members=$(sed -n 's/^nix-trusted:x:[0-9]*://p' "$etc/group")
     case ",$members," in
       *",$name,"*) ;;

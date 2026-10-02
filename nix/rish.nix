@@ -16,7 +16,7 @@
 {
   lib, pkgs, stdenvNoCC, unzip, fetchurl,
   # Baked fallback application id; module.nix substitutes the per-host one.
-  appId ? "com.termux.nix",
+  appId ? "com.example.nns",
 }:
 let
   dex = stdenvNoCC.mkDerivation {

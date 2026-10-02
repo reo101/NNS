@@ -108,7 +108,7 @@ mkdir -p /data/nix/var/nns/services /data/nix/var/nns/ready \
 chown @APP_UID@:@APP_GID@ /data/nix/var/nns/services /data/nix/var/nns/bin /data/nix/var/sshd
 # The app's SELinux categories derive from its uid (c66,... above = uid
 # 10578); mirror the app data dir's live context instead of hardcoding it.
-chcon "$(ls -Zd /data/data/com.termux.nix | tr -s ' ' | cut -d ' ' -f 1)" \
+chcon "$(ls -Zd /data/data/@APP_ID@ | tr -s ' ' | cut -d ' ' -f 1)" \
   /data/nix/var/nns/services
 chcon u:object_r:system_data_file:s0 /data/nix/var/sshd
 chmod 755 /data/ve /data/ve/etc

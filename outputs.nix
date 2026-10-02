@@ -3,10 +3,17 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
   { lib, ... }:
   {
     systems = import inputs.systems.outPath;
-    imports = [ inputs.flake-file.flakeModules.default ];
+    imports = [
+      inputs.flake-file.flakeModules.default
+      # Device specializations; the base flake depends on none of them.
+      ./specialized/cheetah.nix
+    ];
     # A Nix-on-Droid module (class `nixOnDroid`) that replaces proot sessions
     # with the NNS launcher; pass it into `lib.nixOnDroidConfiguration`.
     flake.nixOnDroidModules.nns = import ./nix/nix-on-droid.nix;
+    # Data shared with consumers: the accepted binary caches, rendered into
+    # the NixOS substituters module and the phone's staged nix.conf alike.
+    flake.nns.caches = import ./nix/caches.nix;
     flake-file = {
       nixConfig = {
         commit-lockfile-summary = "chore(flake): update `flake.lock`";
@@ -26,7 +33,6 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
       let
         sources = pkgs.callPackage ./kernel/sources.nix { };
         clang = pkgs.callPackage ./kernel/clang.nix { inherit sources; };
-        kernel = pkgs.callPackage ./kernel { inherit sources clang; };
         launcher = pkgs.callPackage ./nix/launcher.nix { };
         hostLauncher = launcher.override {
           target = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl";
@@ -43,13 +49,11 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         policy = pkgs.callPackage ./nix/sepolicy.nix { };
         rish = pkgs.callPackage ./nix/rish.nix { };
         policyCandidates = pkgs.callPackage ./nix/sepolicy-candidates.nix { };
-        # nix/module.nix has no uid/gid/appId defaults: every build names them
-        # (mkModule without appUid/appGid/appId errors out). This is cheetah's
-        # pair (meta.uid/meta.gid); other phones call mkModule with their
-        # own.
+        # nix/module.nix has no uid/gid/appId defaults: every build names them.
+        # Device specializations call this with their own values (see
+        # specialized/).
         mkModule = { arch ? "arm64", launcher, dns, rish, appUid, appGid, appId }:
           pkgs.callPackage ./nix/module.nix { inherit arch appUid appGid appId launcher dns rish policy; };
-        moduleCheetah = mkModule { inherit launcher dns rish; appUid = 10578; appGid = 10578; appId = "com.termux.nix"; };
         androidTestPkgs = import inputs.nixpkgs {
           inherit system;
           config = { allowUnfree = true; android_sdk.accept_license = true; };
@@ -77,19 +81,15 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           inherit sources;
           stockKernel = stockAndroidKernel;
         };
-        dnsX86 = dns.override { arch = "x86_64"; };
-        moduleX86 = mkModule { launcher = hostLauncher; dns = dnsX86; inherit rish; arch = "x64"; appUid = 10578; appGid = 10578; appId = "com.termux.nix"; };
-        # The phone platform, for the system profile and its deploy app.
-        phonePkgs = import inputs.nixpkgs {
-          localSystem = system;
-          crossSystem = lib.systems.examples.aarch64-multiplatform;
-        };
-        systemProfile = pkgs.callPackage ./nix/system-profile.nix { inherit phonePkgs; };
-        deploySystemProfile = pkgs.callPackage ./nix/system-profile-deploy.nix {
-          inherit systemProfile;
-          sshUser = "nix-on-droid";
-          sshHost = "192.168.1.217";
-          sshPort = 8022;
+        # Mock identity for the test module: no real device is involved.
+        moduleX86 = mkModule {
+          launcher = hostLauncher;
+          dns = dns.override { arch = "x86_64"; };
+          inherit rish;
+          arch = "x64";
+          appUid = 12345;
+          appGid = 12345;
+          appId = "com.example.nns";
         };
         androidTest = import ./nix/android-vm-test.nix {
           inherit pkgs lib sources;
@@ -98,7 +98,6 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           module = moduleX86;
         };
         emacs = pkgs.callPackage ./nix/emacs.nix { };
-        nixOnDroidModule = import ./nix/nix-on-droid.nix;
         usernsTest = pkgs.writeShellApplication {
           name = "nns-test-userns";
           runtimeInputs = [ pkgs.python3 ];
@@ -115,88 +114,41 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
               ${./tests/nns-integration-test.el}
           '';
         };
-        repacker = pkgs.writeShellApplication {
-          name = "nns-repack-boot";
-          runtimeInputs = [ pkgs.python3 ];
-          text = ''
-            exec python3 ${./kernel/repack-boot.py} --manifest ${./kernel/avb.json} "$@"
-          '';
-        };
-        bundle = pkgs.runCommand "nns-cheetah" { } ''
-          mkdir -p "$out/bin"
-          ln -s ${kernel} "$out/kernel"
-          ln -s ${sources.sukisuManager} "$out/SukiSU-manager.apk"
-          ln -s ${moduleCheetah}/nns-module.zip "$out/nns-module.zip"
-          ln -s ${moduleCheetah}/module "$out/module"
-          ln -s ${emacs}/nns-emacs.zip "$out/nns-emacs.zip"
-          ln -s ${emacs}/share/emacs/site-lisp "$out/emacs-lisp"
-          ln -s ${repacker}/bin/nns-repack-boot "$out/bin/nns-repack-boot"
-        '';
       in
       {
+        # Shared derivations for the device specializations.
+        _module.args.nnsShared = { inherit mkModule launcher dns rish sources clang; };
         packages = {
-          # No unsupplied nns-module here: nix/module.nix requires appUid/
-          # appGid, so every zip output names its host and callers with
-          # other ids use module.override.
-          nns-module-cheetah = moduleCheetah;
           nns-sepolicy = policy;
           nns-sepolicy-candidates = policyCandidates;
-          sukisu-manager = sources.sukisuManager;
           nix-enter = launcher;
           nns-dns = dns;
           emacs-integration = emacs;
-          repack-boot = repacker;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           nix-enter-host = hostLauncher;
           test-userns = usernsTest;
           test-emacs = emacsTest;
         } // lib.optionalAttrs (system == "x86_64-linux") {
-          kernel-cheetah = kernel;
           kernel-android-test = androidTestKernel;
           android-test-sdk = androidTestSdk;
           nns-module-x86_64 = moduleX86;
-          nns-system-profile = systemProfile;
           test-android = androidTest.driver;
           android-vm-test = androidTest;
           android-test-apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
           avf-client = pkgs.callPackage ./nix/avf-client.nix { androidSdk = avfClientSdk; };
           avf-probe-initramfs = pkgs.callPackage ./nix/avf-probe-initramfs.nix { };
-          clang-cheetah = clang;
-          cheetah = bundle;
-          default = bundle;
         };
         checks = {
           nns-dns = dns;
-          nns-module = moduleCheetah;
+          nns-module = moduleX86;
           nns-modular-services =
+            assert import ./tests/test-modular-services.nix { inherit pkgs; };
             assert import ./tests/test-modular-services.nix { inherit pkgs; };
             pkgs.runCommand "check-nns-modular-services" { } "touch $out";
           emacs-integration = emacs;
-          repack-boot = pkgs.runCommand "check-repack-boot" {
-            nativeBuildInputs = [ pkgs.python3 ];
-          } ''
-            python3 ${./tests/test-repack.py} ${./kernel/repack-boot.py}
-            touch "$out"
-          '';
-        } // lib.optionalAttrs (system == "x86_64-linux") {
-          kernel-cheetah = kernel;
         };
-        devShells = {
-          default = pkgs.mkShell { packages = [ pkgs.android-tools pkgs.zig ]; };
-        } // lib.optionalAttrs (system == "x86_64-linux") {
-          kernel-cheetah = pkgs.mkShell {
-            inputsFrom = [ kernel ];
-            packages = [ pkgs.sccache ];
-            shellHook = ''
-              export SCCACHE_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/sccache"
-            '';
-          };
-        };
+        devShells.default = pkgs.mkShell { packages = [ pkgs.android-tools pkgs.zig ]; };
         formatter = pkgs.nixfmt;
-      } // lib.optionalAttrs (system == "x86_64-linux") {
-        apps = {
-          deploy-system-profile.program = lib.getExe deploySystemProfile;
-        };
       };
   }
 )

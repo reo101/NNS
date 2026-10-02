@@ -36,13 +36,12 @@ stdenvNoCC.mkDerivation {
     cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh module/
     cp ${policy} module/sepolicy.rule
     substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
-    # The app uid/gid is assigned per install; defaults keep cheetah's
-    # values, other phones override via nns-module.override.
+    # The app uid/gid/appId are assigned per install; every build names them.
     substituteInPlace module/post-fs-data.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}' --replace-fail '@APP_ID@' '${appId}'
     # The wrappers carry the app id only as the baked fallback default;
     # the staged /data/nix/etc/app-id file is the per-host source.
     substituteInPlace module/bin/rish module/bin/rish-probe --replace-fail '@APP_ID@' '${appId}'
-    substituteInPlace module/stage-etc.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}'
+    substituteInPlace module/stage-etc.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}' --replace-fail '@APP_ID@' '${appId}'
     cp etc/profile module/etc/
     cp etc/nix/nix.conf module/etc/nix/
     touch module/skip_mount

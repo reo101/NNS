@@ -108,22 +108,40 @@ fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u
             env = entries.ptr;
         }
     }
-    // Every session gets the module's helper binaries (su/sudo/rish)
-    // ahead of the inherited PATH. /data/nix/var/nns/bin is already the
-    // first sessionPath entry for NoD-managed sessions; this covers bare
-    // `nix-enter -- <cmd>` sessions whose caller PATH lacks it.
+    // Every session gets the module's helper binaries (su/sudo/rish) and
+    // the system profile ahead of the inherited PATH, plus the staged nix
+    // config and the daemon remote - so non-interactive one-shots
+    // (`nix-enter -- nix build ...`) need no profile sourcing. The ENV
+    // hook covers interactive shells; this covers everything else.
     {
         const helpers = "/data/nix/var/nns/bin";
+        const profileBin = "/nix/var/nix/profiles/system-profile/bin";
         const previous = init.environ_map.get("PATH") orelse "";
-        var present = false;
+        var present_helpers = false;
+        var present_profile = false;
         var tokens = std.mem.tokenizeAny(u8, previous, ":");
         while (tokens.next()) |token| {
-            if (std.mem.eql(u8, token, helpers)) present = true;
+            if (std.mem.eql(u8, token, helpers)) present_helpers = true;
+            if (std.mem.eql(u8, token, profileBin)) present_profile = true;
         }
-        if (!present) {
+        if (!present_helpers or !present_profile) {
+            var prefix_buf: [512]u8 = undefined;
+            var prefix_len: usize = 0;
+            if (!present_helpers) {
+                @memcpy(prefix_buf[prefix_len..][0..helpers.len], helpers);
+                prefix_len += helpers.len;
+            }
+            if (!present_helpers and !present_profile) {
+                prefix_buf[prefix_len] = ':';
+                prefix_len += 1;
+            }
+            if (!present_profile) {
+                @memcpy(prefix_buf[prefix_len..][0..profileBin.len], profileBin);
+                prefix_len += profileBin.len;
+            }
             const entry = std.fmt.allocPrintSentinel(init.gpa, "PATH={s}{s}{s}",
-                .{ helpers, if (previous.len == 0) "" else ":", previous }, 0) catch @panic("out of memory");
-            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 1, null) catch @panic("out of memory");
+                .{ prefix_buf[0..prefix_len], if (previous.len == 0) "" else ":", previous }, 0) catch @panic("out of memory");
+            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 2, null) catch @panic("out of memory");
             var count: usize = 0;
             for (std.mem.span(env)) |item| {
                 if (std.mem.startsWith(u8, std.mem.span(item.?), "PATH=")) continue;
@@ -131,7 +149,42 @@ fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u
                 count += 1;
             }
             entries[count] = entry.ptr;
-            entries[count + 1] = null;
+            count += 1;
+            entries[count] = null;
+            env = entries.ptr;
+        }
+    }
+    {
+        const uid = linux.geteuid();
+        const needed = [_]struct { name: []const u8, value: []const u8 } {
+            .{ .name = "NIX_CONF_DIR", .value = "/data/nix/etc/nix" },
+            .{ .name = "NIX_REMOTE", .value = if (uid == 0) "local" else "daemon" },
+        };
+        var missing: usize = 0;
+        for (needed) |item| {
+            if (init.environ_map.get(item.name) == null) missing += 1;
+        }
+        if (missing > 0) {
+            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + missing + 1, null) catch @panic("out of memory");
+            var count: usize = 0;
+            outer: for (std.mem.span(env)) |item| {
+                const span = std.mem.span(item.?);
+                for (needed) |n| {
+                    if (std.mem.startsWith(u8, span, n.name) and span.len > n.name.len and span[n.name.len] == '=') {
+                        continue :outer;
+                    }
+                }
+                entries[count] = item;
+                count += 1;
+            }
+            for (needed) |item| {
+                if (init.environ_map.get(item.name) == null) {
+                    const entry = std.fmt.allocPrintSentinel(init.gpa, "{s}={s}", .{ item.name, item.value }, 0) catch @panic("out of memory");
+                    entries[count] = entry.ptr;
+                    count += 1;
+                }
+            }
+            entries[count] = null;
             env = entries.ptr;
         }
     }

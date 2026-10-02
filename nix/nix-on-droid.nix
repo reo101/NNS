@@ -403,6 +403,37 @@ let
     NIX_CONF_DIR=/data/nix/etc/nix
   '';
 
+  # nns.nix.settings rendered as a marker-delimited block; the updater
+  # replaces the previous block in the staged config atomically enough for
+  # a root-owned file (delete markers, append). post-fs-data preserves the
+  # block when it re-syncs the module template at boot.
+  nixSettingsFragment = pkgs.writeText "nns-nix-settings.conf" ''
+    # >>> nns.nix.settings (managed by activation; post-fs-data preserves this block)
+    ${lib.concatStringsSep "\n" (lib.mapAttrsToList
+      (name: value:
+        let
+          rendered =
+            if lib.isBool value then (if value then "true" else "false")
+            else if lib.isList value then lib.concatStringsSep " " (map toString value)
+            else toString value;
+        in
+        "${name} = ${rendered}")
+      cfg.nix.settings)}
+    # <<< nns.nix.settings
+  '';
+  nixSettingsUpdater = pkgs.writeText "nns-nix-settings-update.sh" /* sh */ ''
+    #!/system/bin/sh
+    set -eu
+    CONF=/data/nix/etc/nix/nix.conf
+    FRAG="$1"
+    if [ ! -f "$CONF" ]; then
+      echo "nns: $CONF missing - deploy the NNS module first" >&2
+      exit 1
+    fi
+    sed -i '/^# >>> nns.nix.settings/,/^# <<< nns.nix.settings/d' "$CONF"
+    cat "$FRAG" >> "$CONF"
+  '';
+
   # sshd must stay in the foreground (-D) or runsv races its daemonizing
   # parent exit into a restart storm. Privsep chroot: OpenSSH >= 9.8 helpers
   # hardcode /var/empty, which cannot exist (rootfs is sb-ro); patched copies
@@ -487,6 +518,23 @@ in
         description = ''
           Path to the static NNS launcher, visible to the app on the host
           filesystem (outside the store namespace).
+        '';
+      };
+
+      nix.settings = mkOption {
+        type = types.attrsOf (types.oneOf [
+          types.str
+          (types.listOf types.str)
+          types.bool
+          types.int
+        ]);
+        default = { };
+        description = ''
+          System-wide nix.conf settings, synced into the shared staged
+          config (/data/nix/etc/nix/nix.conf) on activation. Every
+          consumer of the store sees them: root and app sessions, ssh,
+          and any terminal app. Applies to new nix processes
+          immediately; the daemon picks it up at its next restart.
         '';
       };
 
@@ -660,6 +708,17 @@ in
 
         # Sessions do not use proot; nothing to install.
         installProotStatic = "";
+
+        # Sync nns.nix.settings into the shared staged nix.conf. The staged
+        # file is root-owned, so this goes through the session's own su
+        # wrapper; a dead shizuku server only delays the settings to the
+        # next boot (post-fs-data preserves the block either way).
+        syncNixSettings = /* bash */ ''
+          if ! $DRY_RUN_CMD su -c "sh ${nixSettingsUpdater} ${nixSettingsFragment}"; then
+            echo "nns: could not sync nix.settings (shizuku down?) -" \
+                 "they apply at the next boot instead" >&2
+          fi
+        '';
 
         setUpEtc = /* bash */ ''
           $DRY_RUN_CMD bash ${etcScript} \

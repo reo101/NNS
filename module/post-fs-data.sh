@@ -79,6 +79,18 @@ if [ -n "$cacert" ] && [ -f /data/nix/etc/nix/nix.conf ]; then
   printf 'ssl-cert-file = /nix/store/%s\n' "${cacert#/data/nix/store/}" >> /data/nix/etc/nix/nix.conf
 fi
 
+# Sync the module-owned base config, preserving the NoD-managed
+# settings block (nns.nix.settings) written by activation.
+if [ -f /data/nix/etc/nix/nix.conf ]; then
+  sed -n '/^# >>> nns.nix.settings/,/^# <<< nns.nix.settings/p' \
+    /data/nix/etc/nix/nix.conf > /data/nix/etc/nix/.nns-managed || true
+fi
+cp "$MODDIR/etc/nix/nix.conf" /data/nix/etc/nix/nix.conf || exit 1
+if [ -s /data/nix/etc/nix/.nns-managed ]; then
+  cat /data/nix/etc/nix/.nns-managed >> /data/nix/etc/nix/nix.conf
+fi
+rm -f /data/nix/etc/nix/.nns-managed
+
 # Trust: apps whose uid maps into the nix-trusted group (resolved through
 # the daemon's staged /etc, see stage-etc.sh) are nix trusted-users.
 if [ -f /data/nix/etc/nix/nix.conf ]; then

@@ -5,7 +5,9 @@
 # are layered on top by their own login entry points.
 
 export NIX_PROFILE=/nix/var/nix/profiles/system-profile
-export PATH=$NIX_PROFILE/bin:$PATH
+# The helper wrappers (su/sudo/rish) must stay ahead of the profile: the
+# profile's busybox provides a setuid-less `su` that would shadow them.
+export PATH=/data/nix/var/nns/bin:$NIX_PROFILE/bin:$PATH
 
 # per-session tmpfs, wiped on exit
 export TMPDIR=/nix/tmp

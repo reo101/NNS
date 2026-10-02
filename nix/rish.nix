@@ -114,7 +114,7 @@ let
       fi
       /system/bin/rm -f "$tmp"
       if [ "$silent" -eq 1 ]; then
-        echo "rish: shizuku_server is not running - start it from the app first" >&2
+        echo "rish: no response from the shizuku server (it may not be running, or the output transport died)" >&2
         exit 1
       fi
       if [ "$rc" -ne 0 ]; then

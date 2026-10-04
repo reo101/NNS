@@ -105,6 +105,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         # NixOS guest payload for AVF: evaluated natively for aarch64, so
         # building needs an aarch64 builder or cache hits.
         avfNixosPayload = import ./nix/avf-guest.nix { inherit lib; nixpkgs = inputs.nixpkgs; };
+        avfVirtiofsd = (import inputs.nixpkgs { system = "aarch64-linux"; }).virtiofsd;
         usernsTest = pkgs.writeShellApplication {
           name = "nns-test-userns";
           runtimeInputs = [ pkgs.python3 ];
@@ -147,9 +148,11 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           # NixOS guest payload for AVF; the deploy script runs host-side
           # (adb + ssh + nix copy).
           nns-avf-nixos-payload = avfNixosPayload;
+          nns-avf-virtiofsd = avfVirtiofsd;
           nns-avf-deploy-guest = pkgs.callPackage ./nix/avf-guest-deploy.nix {
             payload = avfNixosPayload;
             client = avfClient;
+            virtiofsd = avfVirtiofsd;
             runner = ./integrations/avf/run-guest.sh;
           };
         };

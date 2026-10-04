@@ -2,7 +2,10 @@ package xyz.reo101.nns.avf
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -97,6 +100,11 @@ object VirtualMachineClient {
         configBuilderType.getMethod("setVmOutputCaptured", Boolean::class.javaPrimitiveType)
             .invoke(configBuilder, true)
         val vmConfig = configBuilderType.getMethod("build").invoke(configBuilder)
+        val filesystemSocket = System.getenv("NNS_VIRTIOFS_SOCKET")
+        if (!filesystemSocket.isNullOrEmpty()) {
+            runWithFilesystemBackend(vmConfig, filesystemSocket)
+            return
+        }
 
         val virtualizationServiceType = Class.forName(
             "android.system.virtualmachine.VirtualizationService"
@@ -170,6 +178,87 @@ object VirtualMachineClient {
         )
     }
 
+    /** Attach an external vhost-user backend without the framework spawning crosvm fs. */
+    private fun runWithFilesystemBackend(vmConfig: Any, socketPath: String) {
+        val convert = vmConfig.javaClass.getDeclaredMethod("toVsRawConfig")
+        convert.isAccessible = true
+        val rawConfig = convert.invoke(vmConfig)
+        // VirtualMachine.run normally supplies these after toVsRawConfig.
+        rawConfig.javaClass.getField("inputDevices").set(
+            rawConfig,
+            java.lang.reflect.Array.newInstance(
+                Class.forName("android.system.virtualizationservice.InputDevice"), 0
+            )
+        )
+        val image = vmConfig.javaClass.getMethod("getCustomImageConfig").invoke(vmConfig)
+        rawConfig.javaClass.getField("networkSupported").setBoolean(
+            rawConfig, image.javaClass.getMethod("useNetwork").invoke(image) as Boolean
+        )
+        val shares = rawConfig.javaClass.getField("sharedPaths").get(rawConfig) as Array<*>
+        val storeShare = shares.single {
+            it!!.javaClass.getField("tag").get(it) == "nix-store"
+        }!!
+        val configType = Class.forName("android.system.virtualizationservice.VirtualMachineConfig")
+        val parcel = configType.getMethod("rawConfig", rawConfig.javaClass).invoke(null, rawConfig)
+        val serviceType = Class.forName("android.system.virtualmachine.VirtualizationService")
+        val acquire = serviceType.getDeclaredMethod("getInstance")
+        acquire.isAccessible = true
+        val service = acquire.invoke(null)
+        val getBinder = serviceType.getDeclaredMethod("getBinder")
+        getBinder.isAccessible = true
+        val binder = getBinder.invoke(service)
+        val binderType = Class.forName("android.system.virtualizationservice.IVirtualizationService")
+        val instanceType = Class.forName("android.system.virtualizationservice.IVirtualMachine")
+        val consolePipe = ParcelFileDescriptor.createPipe()
+        val logPipe = ParcelFileDescriptor.createPipe()
+        var instance: Any? = null
+        var running = false
+        try {
+            LocalSocket().use { socket ->
+                socket.connect(LocalSocketAddress(socketPath, LocalSocketAddress.Namespace.FILESYSTEM))
+                ParcelFileDescriptor.dup(socket.fileDescriptor).use { descriptor ->
+                    storeShare.javaClass.getField("appDomain").setBoolean(storeShare, true)
+                    storeShare.javaClass.getField("socketFd").set(storeShare, descriptor)
+                    instance = binderType.getMethod(
+                        "createVm", configType, ParcelFileDescriptor::class.java,
+                        ParcelFileDescriptor::class.java, ParcelFileDescriptor::class.java,
+                        ParcelFileDescriptor::class.java
+                    ).invoke(binder, parcel, consolePipe[1], null, logPipe[1], null)
+                }
+            }
+            consolePipe[1].close()
+            logPipe[1].close()
+            instanceType.getMethod("start").invoke(instance)
+            running = true
+            println("VM started; external read-only filesystem backend=$socketPath")
+            val console = FileInputStream(consolePipe[0].fileDescriptor)
+            val logs = FileInputStream(logPipe[0].fileDescriptor)
+            val deadline = System.currentTimeMillis() + 600_000
+            var lastState = -1
+            while (System.currentTimeMillis() < deadline) {
+                val state = instanceType.getMethod("getState").invoke(instance) as Int
+                if (state != lastState) {
+                    println("Raw VM state: $state")
+                    lastState = state
+                }
+                drain(console, "console")
+                drain(logs, "log")
+                if (state == 6) { // VirtualMachineState.DEAD
+                    running = false
+                    break
+                }
+                Thread.sleep(500)
+            }
+        } finally {
+            try {
+                if (running) instanceType.getMethod("stop").invoke(instance)
+            } finally {
+                consolePipe.forEach { it.close() }
+                logPipe.forEach { it.close() }
+            }
+        }
+    }
+
     private fun buildPayloadImage(
         sharedPathType: Class<*>,
         imageBuilderType: Class<*>,
@@ -232,7 +321,7 @@ object VirtualMachineClient {
         }
         val params = config.optString("params", null)
         if (params != null) {
-            for (param in params.split("+".toRegex())) {
+            for (param in params.split("+")) {
                 if (param.isNotEmpty()) {
                     imageBuilderType.getMethod("addParam", String::class.java)
                         .invoke(builder, param)

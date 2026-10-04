@@ -37,13 +37,13 @@ let
     specialArgs = { inherit pkgs; };
     modules = [
       { _module.check = false; }
-      ({ ... }: {
+      {
         options.programs.ssh.package = mkOption {
           type = types.package;
           default = pkgs.openssh;
           defaultText = "pkgs.openssh";
         };
-      })
+      }
       "${pkgs.path}/nixos/modules/services/networking/ssh/sshd.nix"
     ];
   }).options.services.openssh;

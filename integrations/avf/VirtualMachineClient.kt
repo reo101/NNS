@@ -239,6 +239,9 @@ object VirtualMachineClient {
                 }
             }
         }
+        // crosvm gets no NIC by default; the payload opts in via "network".
+        imageBuilderType.getMethod("useNetwork", Boolean::class.javaPrimitiveType)
+            .invoke(builder, config.optBoolean("network", false))
 
         // The guest's fstab mounts the tags Terminal would serve; provide them from
         // directories we own so those mounts do not hang, regardless of Terminal.

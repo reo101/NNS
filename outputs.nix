@@ -1,6 +1,6 @@
 inputs:
 inputs.flake-parts.lib.mkFlake { inherit inputs; } (
-  { lib, ... }:
+  { lib, inputs, ... }:
   {
     systems = import inputs.systems.outPath;
     imports = [
@@ -101,6 +101,10 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           module = moduleX86;
         };
         emacs = pkgs.callPackage ./nix/emacs.nix { };
+        avfClient = pkgs.callPackage ./nix/avf-client.nix { androidSdk = avfClientSdk; };
+        # NixOS guest payload for AVF: evaluated natively for aarch64, so
+        # building needs an aarch64 builder or cache hits.
+        avfNixosPayload = import ./nix/avf-guest.nix { inherit lib; nixpkgs = inputs.nixpkgs; };
         usernsTest = pkgs.writeShellApplication {
           name = "nns-test-userns";
           runtimeInputs = [ pkgs.python3 ];
@@ -138,8 +142,16 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           test-android = androidTest.driver;
           android-vm-test = androidTest;
           android-test-apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
-          avf-client = pkgs.callPackage ./nix/avf-client.nix { androidSdk = avfClientSdk; };
+          avf-client = avfClient;
           avf-probe-initramfs = pkgs.callPackage ./nix/avf-probe-initramfs.nix { };
+          # NixOS guest payload for AVF; the deploy script runs host-side
+          # (adb + ssh + nix copy).
+          nns-avf-nixos-payload = avfNixosPayload;
+          nns-avf-deploy-guest = pkgs.callPackage ./nix/avf-guest-deploy.nix {
+            payload = avfNixosPayload;
+            client = avfClient;
+            runner = ./integrations/avf/run-guest.sh;
+          };
         };
         checks = {
           nns-dns = dns;

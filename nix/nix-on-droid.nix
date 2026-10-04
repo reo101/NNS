@@ -439,12 +439,14 @@ in
           module's service.sh).
         '';
 
-        services = mkOption {
+        runit = mkOption {
           default = { };
           type = types.attrsOf serviceSubmodule;
           description = ''
-            Portable modular services supervised by runit. Use `imports` to
-            reuse nixpkgs service modules and `process.argv` and
+            Raw modular services supervised by runit: users and shipped
+            feature modules contribute entries into the same namespace
+            (NixOS's `systemd.services` pattern). Use `imports` to reuse
+            nixpkgs service modules and `process.argv` and
             `process.environment` to configure the process. `nns.startAt`
             and `nns.after` control NNS-specific boot ordering. `nns.enable`
             disables a service. Systemd units, nested services, reload commands
@@ -503,7 +505,7 @@ in
       "/data/nix/var/nns/bin:/nix/var/nix/profiles/system-profile/bin:${config.user.home}/.nix-profile/bin:/system/bin:/system/xbin";
 
     assertions = lib.concatLists (lib.mapAttrsToList (name: service:
-      portableServices.getAssertions [ "nns" "services" "services" name ] service ++ [
+      portableServices.getAssertions [ "nns" "services" "runit" name ] service ++ [
         {
           assertion = builtins.match "[A-Za-z0-9_-]+" name != null
             && name != "nns-unlock-ready";
@@ -524,10 +526,10 @@ in
             && !service.notificationProtocol.systemd && !service.notificationProtocol.s6;
           message = "nns.services.services.${name}: configData, nested services, reload and notification protocols are not supported by NNS runit";
         }
-      ]) cfg.services.services);
+      ]) cfg.services.runit);
     warnings = lib.concatLists (lib.mapAttrsToList (name: service:
-      portableServices.getWarnings [ "nns" "services" "services" name ] service
-    ) cfg.services.services);
+      portableServices.getWarnings [ "nns" "services" "runit" name ] service
+    ) cfg.services.runit);
 
     # runsvdir/sv/pause for nns.services; also what nns-wait's `up` mode
     # shells out to (rendered run scripts put the profile bin on PATH).
@@ -535,7 +537,7 @@ in
     # guest's plain daemon socket tunnels over vsock to `nix-daemon --stdio`,
     # so guest nix works with NIX_REMOTE=daemon and no config changes. The
     # launcher preamble supplies NIX_CONF_DIR and the /nix store namespace.
-    nns.services.services.nix-bridge = mkIf cfg.services.enable {
+    nns.services.runit.nix-bridge = mkIf cfg.services.enable {
       process.argv = [
         "${lib.getExe pkgs.socat}"
         "VSOCK-LISTEN:15555,fork"
@@ -654,18 +656,18 @@ in
           $DRY_RUN_CMD ln -sfn ${unlockReadyRun} ${servicesDir}/nns-unlock-ready/run
           ${lib.concatMapStrings (name:
             let
-              svc = cfg.services.services.${name};
+              svc = cfg.services.runit.${name};
             in
             lib.optionalString svc.nns.enable /* bash */ ''
               $DRY_RUN_CMD mkdir -p ${servicesDir}/${name}
               $DRY_RUN_CMD ln -sfn ${mkRunScript name (servicePreamble cfg.services.sessionPath) svc} ${servicesDir}/${name}/run
             '')
-            (attrNames cfg.services.services)}
+            (attrNames cfg.services.runit)}
           ${lib.concatMapStrings (name:
-            lib.optionalString (! cfg.services.services.${name}.nns.enable) /* bash */ ''
+            lib.optionalString (! cfg.services.runit.${name}.nns.enable) /* bash */ ''
               $DRY_RUN_CMD rm -rf ${servicesDir}/${name}
             '')
-            (attrNames cfg.services.services)}
+            (attrNames cfg.services.runit)}
           # Service feature modules (services/ in the NNS flake) materialize
           # their config and state here.
           ${lib.concatStringsSep "\n" (attrValues cfg.services.extraActivation)}

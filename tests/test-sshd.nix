@@ -1,8 +1,10 @@
 # The sshd feature module: the supervised service is declared through the
-# generic nns.services machinery and its materialization is spliced into
-# the materializeServices activation step. Uses the same mock identity as
-# test-modular-services.nix, plus nixos's assertions module (the option the
-# real NoD eval enforces and the feature relies on).
+# generic nns.services machinery, the option types are lifted from the
+# stock NixOS sshd module, the invariants are forced in the settings
+# apply (with a warning for user-set managed keys), and the materialization
+# is spliced into the materializeServices activation step. Uses the same
+# mock identity as test-modular-services.nix, plus nixos's assertions
+# module (the option the real NoD eval enforces and the feature relies on).
 { pkgs }:
 let
   lib = pkgs.lib;
@@ -51,15 +53,43 @@ let
       (builtins.filter (item: !item.assertion) evaluation.config.assertions);
   enabled = evaluate null;
   disabled = evaluate { nns.services.sshd.enable = lib.mkForce false; };
+  overridden = evaluate {
+    nns.services.sshd.settings.SetEnv = "FOO=bar";
+    nns.services.sshd.settings.PermitTTY = true;
+    nns.services.sshd.settings.Ciphers = [ "chacha20-poly1305@openssh.com" ];
+  };
 in
 assert errors enabled == [ ];
 assert enabled.config.nns.services.sessionPath == "/data/nix/var/nns/bin:/nix/var/nix/profiles/system-profile/bin:/data/data/com.termux.nix/files/home/.nix-profile/bin:/system/bin:/system/xbin";
-assert lib.hasInfix "nns-sshd-wrapper" (lib.elemAt enabled.config.nns.services.services.sshd.process.argv 0);
+assert enabled.config.nns.services.sshd.ports == [ 8022 ];
+# The stolen NixOS types: settings is the freeform sshd_config submodule.
+assert !enabled.config.nns.services.sshd.settings.PasswordAuthentication;
+assert enabled.config.nns.services.sshd.settings.PermitRootLogin == "no";
+# Invariants forced in apply, invariants render into the config file.
+assert enabled.config.nns.services.sshd.settings.PermitUserEnvironment;
+assert !enabled.config.nns.services.sshd.settings.StrictModes;
+assert lib.hasInfix "nns-sshd-wrapper" (lib.elemAt enabled.config.nns.services.runit.sshd.process.argv 0);
+let
+  sshdConfig = enabled.config.nns.services.sshd.settings;
+in
+assert lib.hasInfix "nns-sshd-wrapper" (lib.elemAt enabled.config.nns.services.runit.sshd.process.argv 0);
+assert sshdConfig.PermitUserEnvironment == true;
+assert sshdConfig.StrictModes == false;
+assert sshdConfig.UsePAM == false;
+assert sshdConfig.SetEnv == "NIX_REMOTE=daemon";
+assert sshdConfig.PasswordAuthentication == false;
+assert sshdConfig.PermitRootLogin == "no";
+assert sshdConfig.AuthorizedKeysFile
+  == [ "/data/nix/var/sshd/authorized_keys" "/data/data/com.termux.nix/files/home/.ssh/authorized_keys" ];
 assert lib.hasInfix "nns-sshd_config" enabled.config.build.activation.materializeServices;
 assert lib.hasInfix "nns-ssh-environment" enabled.config.build.activation.materializeServices;
-assert lib.hasInfix "nix-store" (lib.elemAt enabled.config.nns.services.services.sshd.process.argv 0) == false;
-assert !enabled.config.nns.services.services.sshd ? nns || enabled.config.nns.services.services.sshd.nns.startAt == "boot";
 assert errors disabled == [ ];
-assert !(disabled.config.nns.services.services ? sshd);
+assert !(disabled.config.nns.services.runit ? sshd);
 assert !(lib.hasInfix "nns-sshd_config" disabled.config.build.activation.materializeServices);
+# Managed keys are overridden (SetEnv forced to the daemon value, traced
+# as an evaluation warning); plain keys pass through.
+assert overridden.config.nns.services.sshd.settings.SetEnv == "NIX_REMOTE=daemon";
+assert overridden.config.nns.services.sshd.settings.PermitTTY == true;
+assert overridden.config.nns.services.sshd.settings.Ciphers
+  == [ "chacha20-poly1305@openssh.com" ];
 true

@@ -16,5 +16,5 @@
     '';
   };
 
-  config.flake.nixOnDroidModules."nns-sshd" = import ./sshd.nix;
+  config.flake.nixOnDroidModules.nns-sshd = import ./sshd.nix;
 }

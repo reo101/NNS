@@ -15,7 +15,7 @@ let
           _module.freeformType = lib.types.lazyAttrsOf lib.types.anything;
           nns.enable = true;
           nns.services.enable = true;
-          nns.services.services.example = service;
+          nns.services.runit.example = service;
           user.home = "/data/data/com.termux.nix/files/home";
           user.userName = "nix";
           user.uid = 10578;
@@ -62,7 +62,7 @@ let
 in
 assert errors valid == [ ];
 assert valid.config.warnings == [ ];
-assert valid.config.nns.services.services.example.nns.startAt == "unlock";
+assert valid.config.nns.services.runit.example.nns.startAt == "unlock";
 assert !valid.config.build.linkProotStatic;
 assert lib.hasInfix "nns-run-example" valid.config.build.activation.materializeServices;
 assert lib.hasInfix "nns-termux.properties" valid.config.build.activation.linkProperties;

@@ -4,17 +4,20 @@
 # environments (NoD home-manager, per-user profiles) live elsewhere and
 # are layered on top by their own login entry points.
 
-export NIX_PROFILE=/nix/var/nix/profiles/system-profile
+if [ -z "${NNS_PROFILE:-}" ]; then
+  export NNS_PROFILE=/nix/var/nix/profiles/system-profile
+fi
+export NIX_PROFILE=$NNS_PROFILE
 # The helper wrappers (su/sudo/rish) must stay ahead of the profile: the
 # profile's busybox provides a setuid-less `su` that would shadow them.
-export PATH=/data/nix/var/nns/bin:$NIX_PROFILE/bin:$PATH
+export PATH=/data/nix/var/nns/bin:$NIX_PROFILE/bin:/nix/var/nix/profiles/system-profile/bin:$PATH
 
 # per-session tmpfs, wiped on exit
 export TMPDIR=/nix/tmp
 export TMP=$TMPDIR
 
 # keep HOME off the termux prefix unless overridden
-if [ -z "$HOME_SET_BY_USER" ]; then
+if [ -z "$HOME" ] && [ -z "$HOME_SET_BY_USER" ]; then
   export HOME=/data/nix/home
   mkdir -p "$HOME" 2>/dev/null || true
 fi
@@ -30,6 +33,10 @@ export NIX_STORE_DIR=/nix/store
 export NIX_STATE_DIR=/nix/var/nix
 export NIX_CONF_DIR=/data/nix/etc/nix
 export NIX_BUILD_HOOK=
+
+if [ -f "$NNS_PROFILE/etc/nns/environment" ]; then
+  . "$NNS_PROFILE/etc/nns/environment"
+fi
 
 for f in /data/nix/etc/profile.d/*.sh; do
   [ -f "$f" ] && . "$f"

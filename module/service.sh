@@ -7,6 +7,7 @@
 # Aligned labels avoid relabel denials; skipping the store also requires
 # its security.sehash digest (see module/README.md). New objects inherit
 # the label from their parent dirs. Label only public store/config, never app data.
+export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin
 LOG=/data/local/tmp/nix-service.log
 exec > "$LOG" 2>&1
 
@@ -20,6 +21,15 @@ done
 # too. Readable by every domain either way (system_data_file is open-read).
 find /data/nix/var/nix/profiles -maxdepth 1 -type l \
   -exec chcon -h u:object_r:system_data_file:s0 {} +
+
+. /data/adb/modules/nix/system-generation.sh
+if nns_system_selected; then
+  # The generation owns the daemon and supervisor. Never run the app-derived
+  # stage-etc or legacy root service branch after this selection.
+  exec /data/adb/modules/nix/bin/nix-enter -- \
+    /nix/var/nix/profiles/nns-system/activate boot
+fi
+echo 'nns: legacy boot, migrate root services to an NNS system generation'
 
 # Root nix daemon: single-user nix locks the store DB for every command,
 # so unprivileged app sessions (NIX_REMOTE=daemon) talk to this daemon
@@ -54,14 +64,6 @@ if [ -L "$PROFILE" ] || [ -d "$PROFILE" ]; then
       >> /data/local/tmp/nix-daemon.log 2>&1 &
     echo $! > "$PIDFILE"
   fi
-fi
-
-# sshd privsep chroot contents: passwd/group fresh from the staged NSS tree
-# (stage-etc ran above); /data/ve itself was created at post-fs-data.
-if [ -f /data/nix/var/daemon-etc/passwd ]; then
-  cp -f /data/nix/var/daemon-etc/passwd /data/nix/var/daemon-etc/group /data/ve/etc/ || true
-  chmod 755 /data/ve /data/ve/etc
-  chmod 644 /data/ve/etc/* 2>/dev/null || true
 fi
 
 # nns.services: runsvdir over the activation-materialized service dirs,

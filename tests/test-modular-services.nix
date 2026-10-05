@@ -1,7 +1,7 @@
 { pkgs }:
 let
   lib = pkgs.lib;
-  evaluate = service: lib.evalModules {
+  evaluateWith = extraModules: service: lib.evalModules {
     class = "nixOnDroid";
     specialArgs = { inherit pkgs; };
     modules = [
@@ -25,6 +25,10 @@ let
           build.sessionInit = "/nix/etc";
           build.etc = "/nix/etc";
           home-manager.config = null;
+          environment.packages = [ (pkgs.writeShellScriptBin "nix-on-droid" ''
+            PROFILE_DIRECTORY="/nix/var/nix/profiles/nix-on-droid"
+            printf '%s\\n' "$PROFILE_DIRECTORY"
+          '') ];
           environment.path = "/nix/var/nix/profiles/profile";
           environment.binSh = "/system/bin/sh";
           environment.usrBinEnv = "/system/bin/env";
@@ -34,8 +38,22 @@ let
           terminal.properties.fullscreen = "false";
         };
       }
-    ];
+    ] ++ extraModules;
   };
+  evaluate = evaluateWith [ ];
+  consumer = evaluateWith [{
+    nns.systemManaged = true;
+    nns.services.enable = lib.mkForce false;
+  }] { nns.enable = false; };
+  consumerHome = evaluateWith [{
+    nns.systemManaged = true;
+    nns.services.enable = lib.mkForce false;
+    home-manager = lib.mkForce {
+      config.home.activationPackage = "/nix/store/test-home-manager";
+      useUserPackages = false;
+      backupFileExtension = "backup";
+    };
+  }] { nns.enable = false; };
   valid = evaluate {
     imports = [
       ({ options, lib, ... }: {
@@ -56,10 +74,18 @@ let
     process.environment."BAD;KEY" = "value";
     configData."server.conf".text = "value";
   };
+  consumerCommand = lib.findFirst (package: package.name == "nns-nix-on-droid") null consumer.config.environment.packages;
   errors = evaluation:
     map (item: item.message)
       (builtins.filter (item: !item.assertion) evaluation.config.assertions);
 in
+assert consumerCommand.drvPath != "";
+assert errors consumer == [ ];
+assert consumer.config.build.activation.syncNixSettings == "";
+assert !(consumer.config.build.activation ? materializeServices);
+assert lib.hasInfix "/nix/var/nix/profiles/per-user/nix/nix-on-droid" consumer.config.build.activationAfter.linkProfile;
+assert lib.hasInfix "HOME_MANAGER_BACKUP_EXT=backup" consumerHome.config.build.activationAfter.homeManager;
+assert lib.hasInfix "/nix/store/test-home-manager/activate" consumerHome.config.build.activationAfter.homeManager;
 assert errors valid == [ ];
 assert valid.config.warnings == [ ];
 assert valid.config.nns.services.runit.example.nns.startAt == "unlock";

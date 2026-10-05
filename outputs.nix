@@ -14,6 +14,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
     # A Nix-on-Droid module (class `nixOnDroid`) that replaces proot sessions
     # with the NNS launcher; pass it into `lib.nixOnDroidConfiguration`.
     flake.nixOnDroidModules.nns = import ./nix/nix-on-droid.nix;
+    flake.lib.nnsSystem = import ./nix/nns-system.nix { nixpkgs = inputs.nixpkgs; };
+    flake.nnsModules.default = import ./nix/nns-system/module.nix;
     # Data shared with consumers: the accepted binary caches, rendered into
     # the NixOS substituters module and the phone's staged nix.conf alike.
     flake.nns.caches = import ./nix/caches.nix;
@@ -115,12 +117,31 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         };
         emacsTest = pkgs.writeShellApplication {
           name = "nns-test-emacs";
-          runtimeInputs = [ pkgs.python3 ];
+          runtimeInputs = [ pkgs.python3 pkgs.nix pkgs.coreutils ];
           text = ''
             exec python3 ${./tests/test-emacs.py} ${lib.getExe hostLauncher} \
               ${pkgs.emacs-nox}/bin/emacs ${emacs}/share/emacs/site-lisp \
               ${./tests/nns-integration-test.el}
           '';
+        };
+        systemTestSource = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            ./tests/test-nns-activation.py
+            ./tests/test-nns-boot.py
+            ./nix/nns-system/activate.sh
+            ./module/system-generation.sh
+          ];
+        };
+        activationTest = pkgs.writeShellApplication {
+          name = "nns-test-activation";
+          runtimeInputs = [ pkgs.python3 pkgs.bash pkgs.util-linux pkgs.coreutils pkgs.findutils pkgs.gnugrep ];
+          text = ''exec python3 ${systemTestSource}/tests/test-nns-activation.py "$@"'';
+        };
+        bootTest = pkgs.writeShellApplication {
+          name = "nns-test-boot";
+          runtimeInputs = [ pkgs.python3 pkgs.util-linux pkgs.coreutils pkgs.openssh pkgs.mksh ];
+          text = ''exec python3 ${systemTestSource}/tests/test-nns-boot.py ${lib.getExe hostLauncher} "$@"'';
         };
       in
       {
@@ -136,6 +157,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           nix-enter-host = hostLauncher;
           test-userns = usernsTest;
           test-emacs = emacsTest;
+          test-nns-activation = activationTest;
+          test-nns-boot = bootTest;
         } // lib.optionalAttrs (system == "x86_64-linux") {
           kernel-android-test = androidTestKernel;
           android-test-sdk = androidTestSdk;
@@ -159,6 +182,20 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         checks = {
           nns-dns = dns;
           nns-module = moduleX86;
+          nns-system =
+            assert import ./tests/test-nns-system.nix { inherit pkgs; };
+            pkgs.runCommand "check-nns-system" { } "touch $out";
+          nns-generation = ((import ./nix/nns-system.nix { nixpkgs = inputs.nixpkgs; }) {
+            inherit pkgs system;
+            modules = [{
+              environment.profiles.development.packages = [ pkgs.git pkgs.bashInteractive ];
+              services.openssh = {
+                enable = true;
+                authorizedRootKeys = [ "ssh-ed25519 AAAATEST evaluation-only" ];
+              };
+            }];
+          }).config.system.build.toplevel;
+          nns-reconfiguration = import ./tests/test-nns-reconfiguration.nix { inherit pkgs; };
           nns-modular-services =
             assert import ./tests/test-modular-services.nix { inherit pkgs; };
             pkgs.runCommand "check-nns-modular-services" { } "touch $out";

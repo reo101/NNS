@@ -76,7 +76,164 @@ fn checked2(rc: usize, op: []const u8) usize {
     return rc;
 }
 
-fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u8) noreturn {
+fn mountPrivateVar(init: std.process.Init, root: []const u8) !void {
+    // /var/empty belongs to this synthetic root, not Android's read-only
+    // rootfs. Preserve the remaining /var entries without writing through
+    // a bind mount into the host. In particular, never reuse host empty/.
+    const previous_umask = checked(linux.syscall1(.umask, 0), "set namespace umask");
+    defer _ = linux.syscall1(.umask, previous_umask);
+    var var_buf: [4096]u8 = undefined;
+    const var_root = path(&var_buf, root, "var");
+    _ = checked(linux.mkdirat(-100, var_root.ptr, 0o755), "create private /var");
+    var destination_buf: [4096]u8 = undefined;
+    _ = checked(linux.mkdirat(-100, path(&destination_buf, var_root, "empty").ptr, 0o755), "create private /var/empty");
+    var original: ?std.Io.Dir = std.Io.Dir.openDirAbsolute(init.io, "/var", .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (original) |*directory| {
+        defer directory.close(init.io);
+        var entries = directory.iterate();
+        var source_buf: [4096]u8 = undefined;
+        var target_buf: [4096]u8 = undefined;
+        while (try entries.next(init.io)) |entry| {
+            if (std.mem.eql(u8, entry.name, "empty")) continue;
+            const destination = path(&destination_buf, var_root, entry.name);
+            if (entry.kind == .directory) {
+                _ = checked(linux.mkdirat(-100, destination.ptr, 0o755), "mirror /var directory");
+                mount("bind /var mirror", path(&source_buf, "/var", entry.name).ptr, destination.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
+            } else {
+                const target = path(&target_buf, "../.nns-host/var", entry.name);
+                _ = checked(linux.symlinkat(target.ptr, -100, destination.ptr), "mirror /var entry");
+            }
+        }
+    }
+}
+
+fn mountCallerEtc(init: std.process.Init, root: []const u8, uid: u32, gid: u32) !void {
+    const previous_umask = checked(linux.syscall1(.umask, 0), "set namespace umask");
+    defer _ = linux.syscall1(.umask, previous_umask);
+    var etc_buf: [4096]u8 = undefined;
+    const etc_root = path(&etc_buf, root, "etc");
+    _ = checked(linux.mkdirat(-100, etc_root.ptr, 0o755), "create private /etc");
+    var destination_buf: [4096]u8 = undefined;
+    var original: ?std.Io.Dir = std.Io.Dir.openDirAbsolute(init.io, "/etc", .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (original) |*directory| {
+        defer directory.close(init.io);
+        var entries = directory.iterate();
+        var source_buf: [4096]u8 = undefined;
+        var target_buf: [4096]u8 = undefined;
+        while (try entries.next(init.io)) |entry| {
+            if (std.mem.eql(u8, entry.name, "passwd") or std.mem.eql(u8, entry.name, "group")) continue;
+            const destination = path(&destination_buf, etc_root, entry.name);
+            if (entry.kind == .directory) {
+                _ = checked(linux.mkdirat(-100, destination.ptr, 0o755), "mirror /etc directory");
+                mount("bind /etc mirror", path(&source_buf, "/etc", entry.name).ptr, destination.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
+            } else {
+                _ = checked(linux.symlinkat(path(&target_buf, "../.nns-host/etc", entry.name).ptr, -100, destination.ptr), "mirror /etc entry");
+            }
+        }
+    }
+    const inherited_name = init.environ_map.get("USER") orelse "";
+    const name = if (uid == 0) "root" else if (inherited_name.len != 0) inherited_name else
+        try std.fmt.allocPrint(init.gpa, "uid{d}", .{uid});
+    const group = if (gid == 0) "root" else try std.fmt.allocPrint(init.gpa, "gid{d}", .{gid});
+    const home = init.environ_map.get("HOME") orelse "/";
+    const inherited_shell = init.environ_map.get("SHELL") orelse "";
+    const shell = if (inherited_shell.len == 0) "/bin/sh" else inherited_shell;
+    for ([_][]const u8{ name, home, shell }) |field| {
+        if (std.mem.indexOfAny(u8, field, ":\r\n") != null) return error.InvalidAccountEnvironment;
+    }
+    const passwd = try std.fmt.allocPrint(init.gpa, "{s}:x:{d}:{d}:NNS caller:{s}:{s}\n", .{ name, uid, gid, home, shell });
+    const groups = try std.fmt.allocPrint(init.gpa, "{s}:x:{d}:\n", .{ group, gid });
+    for ([_]struct { name: []const u8, contents: []const u8 }{
+        .{ .name = "passwd", .contents = passwd },
+        .{ .name = "group", .contents = groups },
+    }) |file| {
+        const destination = path(&destination_buf, etc_root, file.name);
+        const fd: i32 = @intCast(checked(linux.openat(-100, destination.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644), "create caller account file"));
+        defer _ = linux.close(fd);
+        if (checked(linux.write(fd, file.contents.ptr, file.contents.len), "write caller account file") != file.contents.len) return error.ShortAccountWrite;
+    }
+}
+
+fn profilePath(init: std.process.Init, profile: []const u8, generation: ?[]const u8) [:0]u8 {
+    var candidate_buf: [4096]u8 = undefined;
+    const candidate = if (profile.len > 0 and profile[0] == '/') blk: {
+        if (generation != null) {
+            std.debug.print("nix-enter: --generation requires a named profile\n", .{});
+            std.process.exit(2);
+        }
+        break :blk std.fmt.bufPrintZ(&candidate_buf, "{s}", .{profile}) catch unreachable;
+    } else blk: {
+        var name = profile;
+        if (name.len == 0 or !std.ascii.isAlphanumeric(name[0])) {
+            std.debug.print("nix-enter: invalid profile name\n", .{});
+            std.process.exit(2);
+        }
+        for (name) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_') {
+                std.debug.print("nix-enter: invalid profile name\n", .{});
+                std.process.exit(2);
+            }
+        }
+        if (generation) |number| {
+            name = std.fmt.allocPrint(init.gpa, "{s}-{s}-link", .{ name, number }) catch @panic("out of memory");
+        }
+        break :blk std.fmt.bufPrintZ(&candidate_buf, "/nix/var/nix/profiles/{s}", .{name}) catch unreachable;
+    };
+    const fd = linux.openat(-100, candidate.ptr, .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
+    if (@as(isize, @bitCast(fd)) < 0) {
+        std.debug.print("nix-enter: profile not found or not a directory: {s}\n", .{candidate});
+        std.process.exit(1);
+    }
+    defer _ = linux.close(@intCast(fd));
+    var fd_path_buf: [64]u8 = undefined;
+    const fd_path = std.fmt.bufPrintZ(&fd_path_buf, "/proc/self/fd/{d}", .{fd}) catch unreachable;
+    var resolved_buf: [4096]u8 = undefined;
+    const resolved_len = linux.readlinkat(-100, fd_path.ptr, &resolved_buf, resolved_buf.len);
+    if (@as(isize, @bitCast(resolved_len)) < 0 or resolved_len >= resolved_buf.len) {
+        std.debug.print("nix-enter: cannot resolve profile: {s}\n", .{candidate});
+        std.process.exit(1);
+    }
+    const raw_resolved = resolved_buf[0..resolved_len];
+    // The mirrored host root exposes the same bind-mounted store at this alias.
+    const host_prefix = "/.nns-host";
+    const resolved = if (std.mem.startsWith(u8, raw_resolved, host_prefix)) raw_resolved[host_prefix.len..] else raw_resolved;
+    if (!std.mem.startsWith(u8, resolved, "/nix/store/") or resolved.len <= "/nix/store/".len) {
+        std.debug.print("nix-enter: profile target is not immutable store path: {s}\n", .{resolved});
+        std.process.exit(1);
+    }
+    var bin_buf: [4096]u8 = undefined;
+    const bin = path(&bin_buf, resolved, "bin");
+    const bin_fd = linux.openat(-100, bin.ptr, .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
+    if (@as(isize, @bitCast(bin_fd)) < 0) {
+        std.debug.print("nix-enter: profile has no bin directory: {s}\n", .{resolved});
+        std.process.exit(1);
+    }
+    _ = linux.close(@intCast(bin_fd));
+    return std.fmt.allocPrintSentinel(init.gpa, "{s}", .{resolved}, 0) catch @panic("out of memory");
+}
+
+fn replaceEnv(init: std.process.Init, env: *[*:null]const ?[*:0]const u8, name: []const u8, value: []const u8) void {
+    const entry = std.fmt.allocPrintSentinel(init.gpa, "{s}={s}", .{ name, value }, 0) catch @panic("out of memory");
+    const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env.*) + 2, null) catch @panic("out of memory");
+    var count: usize = 0;
+    for (std.mem.span(env.*)) |item| {
+        const span = std.mem.span(item.?);
+        if (std.mem.startsWith(u8, span, name) and span.len > name.len and span[name.len] == '=') continue;
+        entries[count] = item;
+        count += 1;
+    }
+    entries[count] = entry.ptr;
+    entries[count + 1] = null;
+    env.* = entries.ptr;
+}
+
+fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u8, profile_arg: ?[]const u8, generation: ?[]const u8) noreturn {
     const argv = init.gpa.allocSentinel(?[*:0]const u8, args.len, null) catch @panic("out of memory");
     for (args, 0..) |arg, i| argv[i] = arg;
     var env: [*:null]const ?[*:0]const u8 = @ptrCast(init.minimal.environ.block.view().slice.ptr);
@@ -108,51 +265,23 @@ fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u
             env = entries.ptr;
         }
     }
-    // Every session gets the module's helper binaries (su/sudo/rish) and
-    // the system profile ahead of the inherited PATH, plus the staged nix
-    // config and the daemon remote - so non-interactive one-shots
-    // (`nix-enter -- nix build ...`) need no profile sourcing. The ENV
-    // hook covers interactive shells; this covers everything else.
-    {
-        const helpers = "/data/nix/var/nns/bin";
-        const profileBin = "/nix/var/nix/profiles/system-profile/bin";
-        const previous = init.environ_map.get("PATH") orelse "";
-        var present_helpers = false;
-        var present_profile = false;
-        var tokens = std.mem.tokenizeAny(u8, previous, ":");
-        while (tokens.next()) |token| {
-            if (std.mem.eql(u8, token, helpers)) present_helpers = true;
-            if (std.mem.eql(u8, token, profileBin)) present_profile = true;
-        }
-        if (!present_helpers or !present_profile) {
-            var prefix_buf: [512]u8 = undefined;
-            var prefix_len: usize = 0;
-            if (!present_helpers) {
-                @memcpy(prefix_buf[prefix_len..][0..helpers.len], helpers);
-                prefix_len += helpers.len;
-            }
-            if (!present_helpers and !present_profile) {
-                prefix_buf[prefix_len] = ':';
-                prefix_len += 1;
-            }
-            if (!present_profile) {
-                @memcpy(prefix_buf[prefix_len..][0..profileBin.len], profileBin);
-                prefix_len += profileBin.len;
-            }
-            const entry = std.fmt.allocPrintSentinel(init.gpa, "PATH={s}{s}{s}",
-                .{ prefix_buf[0..prefix_len], if (previous.len == 0) "" else ":", previous }, 0) catch @panic("out of memory");
-            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 2, null) catch @panic("out of memory");
-            var count: usize = 0;
-            for (std.mem.span(env)) |item| {
-                if (std.mem.startsWith(u8, std.mem.span(item.?), "PATH=")) continue;
-                entries[count] = item;
-                count += 1;
-            }
-            entries[count] = entry.ptr;
-            count += 1;
-            entries[count] = null;
-            env = entries.ptr;
-        }
+    const selected_profile = if (profile_arg) |selected|
+        profilePath(init, selected, generation)
+    else
+        "/nix/var/nix/profiles/system-profile";
+    const helpers = "/data/nix/var/nns/bin";
+    const profile_bin = std.fmt.allocPrint(init.gpa, "{s}/bin", .{selected_profile}) catch @panic("out of memory");
+    const system_bin = "/nix/var/nix/profiles/system-profile/bin";
+    const previous_path = init.environ_map.get("PATH") orelse "";
+    const constructed_path = std.fmt.allocPrint(init.gpa, "{s}:{s}:{s}{s}{s}", .{
+        helpers, profile_bin, system_bin, if (previous_path.len == 0) "" else ":", previous_path,
+    }) catch @panic("out of memory");
+    replaceEnv(init, &env, "PATH", constructed_path);
+    replaceEnv(init, &env, "NNS_PROFILE", selected_profile);
+    // Interactive shells may source the profile's generated environment snippet.
+    const env_profile = "/data/nix/etc/profile";
+    if (init.environ_map.get("ENV") == null or init.environ_map.get("ENV").?.len == 0) {
+        replaceEnv(init, &env, "ENV", env_profile);
     }
     {
         const uid = linux.geteuid();
@@ -160,57 +289,14 @@ fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u
             .{ .name = "NIX_CONF_DIR", .value = "/data/nix/etc/nix" },
             .{ .name = "NIX_REMOTE", .value = if (uid == 0) "local" else "daemon" },
         };
-        var missing: usize = 0;
         for (needed) |item| {
-            if (init.environ_map.get(item.name) == null) missing += 1;
-        }
-        if (missing > 0) {
-            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + missing + 1, null) catch @panic("out of memory");
-            var count: usize = 0;
-            outer: for (std.mem.span(env)) |item| {
-                const span = std.mem.span(item.?);
-                for (needed) |n| {
-                    if (std.mem.startsWith(u8, span, n.name) and span.len > n.name.len and span[n.name.len] == '=') {
-                        continue :outer;
-                    }
-                }
-                entries[count] = item;
-                count += 1;
+            if (init.environ_map.get(item.name) == null) {
+                replaceEnv(init, &env, item.name, item.value);
             }
-            for (needed) |item| {
-                if (init.environ_map.get(item.name) == null) {
-                    const entry = std.fmt.allocPrintSentinel(init.gpa, "{s}={s}", .{ item.name, item.value }, 0) catch @panic("out of memory");
-                    entries[count] = entry.ptr;
-                    count += 1;
-                }
-            }
-            entries[count] = null;
-            env = entries.ptr;
-        }
-    }
-    // Interactive POSIX shells (mksh, dash, bash in sh mode) source $ENV at
-    // startup: point it at the staged system profile so a bare
-    // `nix-enter -- sh` session starts logged into the system profile.
-    // Non-interactive shells ignore ENV, so run scripts and build hooks
-    // are unaffected; a caller-provided ENV wins.
-    {
-        const env_profile = "/data/nix/etc/profile";
-        const current = init.environ_map.get("ENV") orelse "";
-        if (current.len == 0) {
-            const entry = std.fmt.allocPrintSentinel(init.gpa, "ENV={s}", .{env_profile}, 0) catch @panic("out of memory");
-            const entries = init.gpa.allocSentinel(?[*:0]const u8, std.mem.len(env) + 2, null) catch @panic("out of memory");
-            var count: usize = 0;
-            for (std.mem.span(env)) |item| {
-                entries[count] = item;
-                count += 1;
-            }
-            entries[count] = entry.ptr;
-            entries[count + 1] = null;
-            env = entries.ptr;
         }
     }
     if (std.mem.indexOfScalar(u8, std.mem.span(args[0]), '/') == null) {
-        var dirs = std.mem.splitScalar(u8, init.environ_map.get("PATH") orelse "/system/bin:/bin:/usr/bin", ':');
+        var dirs = std.mem.splitScalar(u8, constructed_path, ':');
         var buf: [4096]u8 = undefined;
         while (dirs.next()) |dir| {
             const executable = path(&buf, if (dir.len == 0) "." else dir, std.mem.span(args[0]));
@@ -227,6 +313,9 @@ pub fn main(init: std.process.Init) !u8 {
     const args = init.minimal.args.vector;
     var store: [*:0]const u8 = "/data/nix";
     var tmpdir: []const u8 = init.environ_map.get("TMPDIR") orelse "/tmp";
+    var profile: []const u8 = "system-profile";
+    var profile_set = false;
+    var generation: ?[]const u8 = null;
     var etcdir: [*:0]const u8 = "";
     var userns = linux.geteuid() != 0;
     var i: usize = 1;
@@ -237,16 +326,33 @@ pub fn main(init: std.process.Init) !u8 {
             break;
         } else if (std.mem.eql(u8, arg, "--userns")) {
             userns = true;
-        } else if (std.mem.eql(u8, arg, "--store") or std.mem.eql(u8, arg, "--tmpdir") or std.mem.eql(u8, arg, "--etc")) {
+        } else if (std.mem.eql(u8, arg, "--profile") or std.mem.eql(u8, arg, "--generation") or std.mem.eql(u8, arg, "--store") or std.mem.eql(u8, arg, "--tmpdir") or std.mem.eql(u8, arg, "--etc")) {
             i += 1;
             if (i == args.len) return error.MissingOptionValue;
-            if (std.mem.eql(u8, arg, "--store")) store = args[i] else if (std.mem.eql(u8, arg, "--tmpdir")) tmpdir = std.mem.span(args[i]) else etcdir = args[i];
+            if (std.mem.eql(u8, arg, "--store")) {
+                store = args[i];
+            } else if (std.mem.eql(u8, arg, "--tmpdir")) {
+                tmpdir = std.mem.span(args[i]);
+            } else if (std.mem.eql(u8, arg, "--etc")) {
+                etcdir = args[i];
+            } else if (std.mem.eql(u8, arg, "--profile")) {
+                profile = std.mem.span(args[i]);
+                profile_set = true;
+            } else {
+                const value = std.mem.span(args[i]);
+                if (value.len == 0) return error.InvalidGeneration;
+                for (value) |c| if (!std.ascii.isDigit(c)) return error.InvalidGeneration;
+                const parsed = std.fmt.parseInt(u64, value, 10) catch return error.InvalidGeneration;
+                if (parsed == 0) return error.InvalidGeneration;
+                generation = std.fmt.allocPrint(init.gpa, "{d}", .{parsed}) catch @panic("out of memory");
+            }
         } else if (std.mem.eql(u8, arg, "--help")) {
-            std.debug.print("usage: nix-enter [--userns] [--store PATH] [--tmpdir DIR] [--etc DIR] -- COMMAND [ARG...]\n", .{});
+            std.debug.print("usage: nix-enter [--userns] [--profile NAME|/absolute/path] [--generation NUMBER] [--store PATH] [--tmpdir DIR] [--etc DIR] -- COMMAND [ARG...]\n", .{});
             return 0;
         } else break;
     }
     if (i == args.len) return error.CommandRequired;
+    if (generation != null and (!profile_set or profile.len == 0 or profile[0] == '/')) return error.InvalidGeneration;
     if (store[0] != '/' or tmpdir.len == 0 or tmpdir[0] != '/' or (etcdir[0] != 0 and etcdir[0] != '/')) return error.AbsolutePathRequired;
 
     // The parent owns only an empty scratch directory, and removes it after
@@ -297,13 +403,15 @@ pub fn main(init: std.process.Init) !u8 {
     // mounts fails in less-privileged user namespaces because they are locked.
     mount("bind host tree", "/", path(&buf, root, ".nns-host").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
     mount("bind store", store, path(&buf, root, "nix").ptr, null, linux.MS.BIND | linux.MS.REC, 0);
-    // Sessions default to a mirror of the live Android /etc; with --etc the
-    // caller supplies a NoD-style tree instead (passwd/group for getpwuid).
-    // Android's copy stays reachable at /.nns-host/etc either way.
+    // Default account records describe only the caller. Explicit --etc keeps
+    // the supplied tree authoritative for NoD and supervised services.
+    // The original /etc remains reachable at /.nns-host/etc.
     if (etcdir[0] != 0) {
         const dest = path(&buf, root, "etc");
         _ = checked(linux.mkdirat(-100, dest.ptr, 0o755), "mkdir etc in new root");
         mount("bind etc", etcdir, dest.ptr, null, linux.MS.BIND, 0);
+    } else {
+        try mountCallerEtc(init, root, uid, gid);
     }
     var original = try std.Io.Dir.openDirAbsolute(init.io, "/", .{ .iterate = true });
     var entries = original.iterate();
@@ -311,9 +419,9 @@ pub fn main(init: std.process.Init) !u8 {
     var source_buf: [4096]u8 = undefined;
     var has_tmp = false;
     while (try entries.next(init.io)) |entry| {
-        if (std.mem.eql(u8, entry.name, "nix") or
+        if (std.mem.eql(u8, entry.name, "nix") or std.mem.eql(u8, entry.name, "var") or
             std.mem.eql(u8, entry.name, ".nns-host") or std.mem.eql(u8, entry.name, ".nns-detach") or
-            (etcdir[0] != 0 and std.mem.eql(u8, entry.name, "etc"))) continue;
+            std.mem.eql(u8, entry.name, "etc")) continue;
         if (std.mem.eql(u8, entry.name, "tmp")) has_tmp = true;
         const target = path(&target_buf, ".nns-host", entry.name);
         const dest = path(&buf, root, entry.name);
@@ -326,12 +434,19 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     original.close(init.io);
+    try mountPrivateVar(init, root);
     if (!has_tmp) _ = checked(linux.mkdirat(-100, path(&buf, root, "tmp").ptr, 0o1777), "create /tmp");
     _ = checked(linux.chdir(root.ptr), "chdir new root");
     _ = checked(linux.pivot_root(".", ".nns-detach"), "pivot_root");
     _ = checked(linux.chdir("/"), "chdir root");
     _ = checked(linux.umount2("/.nns-detach", 2), "detach original root");
     _ = checked(linux.unlinkat(-100, "/.nns-detach", 0x200), "remove old root mountpoint");
+    // A host nscd socket would bypass this namespace's passwd/group files.
+    const nscd = linux.openat(-100, "/var/run/nscd", .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
+    if (@as(isize, @bitCast(nscd)) >= 0) {
+        _ = linux.close(@intCast(nscd));
+        mount("hide host NSS cache", "/var/empty", "/var/run/nscd", null, linux.MS.BIND, 0);
+    }
     _ = checked(linux.chdir(@ptrCast(&cwd)), "restore working directory");
-    exec(init, args[i..], store);
+    exec(init, args[i..], store, if (profile_set) profile else null, generation);
 }

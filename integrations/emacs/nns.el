@@ -1,14 +1,17 @@
 ;;; nns.el --- Run local subprocesses in a native Nix namespace -*- lexical-binding: t; -*-
-;; Version: 3.1.0
+;; Version: 3.2.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: processes, tools
 ;;
 ;;; Commentary:
-;; `nns-mode' wraps local subprocess creation with the non-setuid NNS launcher.
-;; Git, language servers and shells see canonical /nix; the GUI Emacs process
-;; itself does not.  This is not a file-name handler, proot, or a root daemon.
-;; Android app SELinux/seccomp must permit the launcher's namespace operations.
+;; Local subprocesses retain the hosting app's UID and HOME.  A selected
+;; package profile supplies tools, not another app's login or activation.
+;; Profile names and generations resolve inside the namespace.  Each buffer
+;; keeps its resolved target until the selection is reset.
 ;;; Code:
+
+(require 'subr-x)
+(declare-function comint-check-proc "comint" (buffer))
 
 (defgroup nns nil "Native Nix subprocess namespaces." :group 'processes)
 (defcustom nns-launcher "/data/nix/bin/nix-enter"
@@ -17,43 +20,92 @@
 (defcustom nns-store "/data/nix"
   "Physical backing directory for canonical /nix."
   :type 'directory :group 'nns)
-(defcustom nns-profile "/nix/var/nix/profiles/default"
-  "Profile whose bin directory is searched inside the namespace.
-The default bootstrap profile provides nix, git and bash for every
-hosting app; point this at another profile for a richer PATH."
-  :type 'directory :group 'nns)
+(defcustom nns-profile "development"
+  "Published profile name or absolute profile path inside the namespace.
+This changes subprocess tools, not UID, HOME or services.  Directory-local
+configuration can select a profile for a project.  Published generations
+must remain retained by the administrative NNS configuration."
+  :type 'string :group 'nns)
+(defcustom nns-profile-generation nil
+  "Generation of the named profile, or nil for its current generation.
+The selected target is resolved once per buffer, not on every subprocess."
+  :type '(choice (const :tag "Current" nil) (integer :tag "Generation"))
+  :group 'nns)
+(make-variable-buffer-local 'nns-profile)
+(make-variable-buffer-local 'nns-profile-generation)
 (defcustom nns-system-shell "/system/bin/sh"
-  "Existing Android shell used for namespace diagnostics and shell sessions."
+  "Android shell used for namespace diagnostics and command execution."
   :type 'file :group 'nns)
+(defvar-local nns--profile-cache nil)
 (defvar nns--inhibit nil)
 (defvar nns-mode nil)
 (defvar android-use-exec-loader)
 
-(defun nns--command (command)
-  "Prefix COMMAND without interpreting or concatenating its arguments."
+(defun nns--launcher-command (command &optional profile generation)
+  "Wrap COMMAND with PROFILE and GENERATION without shell interpolation."
   (append (list nns-launcher "--userns" "--store" nns-store
-                "--tmpdir" (directory-file-name temporary-file-directory) "--")
-          command))
+                "--tmpdir" (directory-file-name temporary-file-directory))
+          (when profile (list "--profile" profile))
+          (when generation (list "--generation" (number-to-string generation)))
+          (list "--") command))
+
+(defun nns--invoke (function &rest args)
+  "Call FUNCTION with ARGS and process-local Nix client configuration."
+  (let ((nns--inhibit t)
+        ;; Android's emulated exec traces children outside their namespace.
+        (android-use-exec-loader nil)
+        (process-environment (copy-sequence process-environment)))
+    (setenv "NIX_CONF_DIR" (concat (directory-file-name nns-store) "/etc/nix"))
+    (setenv "NIX_REMOTE" "daemon")
+    (apply function args)))
+
+(defun nns--resolved-profile ()
+  "Resolve this buffer's selection inside the namespace and retain its target."
+  (unless (and (stringp nns-profile)
+               (or (string-prefix-p "/" nns-profile)
+                   (string-match-p "\\`[A-Za-z0-9][A-Za-z0-9_-]*\\'" nns-profile)))
+    (user-error "NNS profile must be a published name or absolute path"))
+  (when (and nns-profile-generation
+             (or (not (integerp nns-profile-generation))
+                 (<= nns-profile-generation 0)
+                 (string-prefix-p "/" nns-profile)))
+    (user-error "NNS generation requires a named profile and a positive integer"))
+  (if (equal (list nns-profile nns-profile-generation) (car nns--profile-cache))
+      (cdr nns--profile-cache)
+    ;; Capture the selection before entering a temporary buffer: profile
+    ;; variables are buffer-local, while the Android GUI cannot inspect /nix.
+    (let* ((selection (list nns-profile nns-profile-generation))
+           (command (nns--launcher-command
+                     (list nns-system-shell "-c" "printf '%s' \"$NNS_PROFILE\"")
+                     nns-profile nns-profile-generation))
+           (target
+            (with-temp-buffer
+              (let ((status (apply #'nns--invoke #'call-process
+                                   (car command) nil (current-buffer) nil (cdr command))))
+                (unless (and (integerp status) (zerop status))
+                  (user-error "NNS profile resolution failed (%s): %s" status (buffer-string)))
+                (buffer-string)))))
+      (unless (and (string-prefix-p "/" target)
+                   (not (string-match-p "[\n\r]" target)))
+        (user-error "NNS launcher returned an invalid profile target"))
+      (setq nns--profile-cache (cons selection target))
+      target)))
+
+(defun nns--command (command)
+  "Run COMMAND in this buffer's pinned package environment."
+  (nns--launcher-command
+   (append
+    (list nns-system-shell "-c"
+          (concat "if [ -f \"$NNS_PROFILE/etc/nns/environment\" ]; then "
+                  ". \"$NNS_PROFILE/etc/nns/environment\" || exit; fi; exec \"$@\"")
+          "nns-exec")
+    command)
+   (nns--resolved-profile)))
 
 (defun nns--wrap-p (program)
   (and nns-mode (not nns--inhibit) program
        (not (equal program nns-launcher))
        (not (file-remote-p default-directory))))
-
-(defun nns--invoke (function &rest args)
-  "Call FUNCTION with ARGS and a process-local Nix environment."
-  (let ((nns--inhibit t)
-        ;; Android's emulated exec bypasses SELinux entrypoint transitions and
-        ;; traces descendants from outside their new mount namespace.
-        (android-use-exec-loader nil)
-        (process-environment (copy-sequence process-environment)))
-    (setenv "PATH" (concat (directory-file-name nns-profile) "/bin:"
-                          (or (getenv "PATH") "/system/bin")))
-    (setenv "NIX_CONF_DIR" (concat (directory-file-name nns-store) "/etc/nix"))
-    ;; The store is root-owned; every single-user nix command locks the
-    ;; DB, so sessions talk to the root daemon instead of the DB directly.
-    (setenv "NIX_REMOTE" "daemon")
-    (apply function args)))
 
 (defun nns--call-process (function program &optional infile destination display &rest args)
   (if (nns--wrap-p program)
@@ -80,60 +132,46 @@ hosting app; point this at another profile for a richer PATH."
       (apply function args))))
 
 (defun nns--executable-find (function command &optional remote)
-  ;; Native Emacs cannot stat /nix itself. Ask a child in the namespace instead.
   (if (not (nns--wrap-p command))
       (funcall function command remote)
-    (with-temp-buffer
-      (let ((status
-             (apply #'nns--invoke #'call-process nns-launcher nil (current-buffer) nil
-                    (cdr (nns--command
-                          (list nns-system-shell "-c"
-                                "p=$(command -v \"$1\") && test -f \"$p\" && test -x \"$p\" && printf '%s' \"$p\""
-                                "nns-executable-find" command))))))
-        (if (and (integerp status) (zerop status))
-            (buffer-string)
-          (funcall function command remote))))))
+    (let ((wrapped (nns--command
+                    (list nns-system-shell "-c"
+                          "p=$(command -v \"$1\") && test -f \"$p\" && test -x \"$p\" && printf '%s' \"$p\""
+                          "nns-executable-find" command))))
+      (with-temp-buffer
+        (let ((status (apply #'nns--invoke #'call-process (car wrapped) nil (current-buffer) nil
+                             (cdr wrapped))))
+          ;; Do not fall back to host tools when the selected environment
+          ;; lacks a command. Discovery and actual execution must agree.
+          (when (and (integerp status) (zerop status)) (buffer-string)))))))
 
 (defun nns--nix-file-p (file)
   (and nns-mode (not nns--inhibit)
+       (not (file-remote-p default-directory))
        (stringp file) (string-prefix-p "/nix/" file)))
 
 (defun nns--ns-test (file test)
   "Return non-nil when TEST passes for FILE inside the namespace."
-  (let ((status (apply #'nns--invoke #'call-process nns-launcher nil nil nil
-                       (cdr (nns--command
-                             (list nns-system-shell "-c"
-                                   (concat test " \"$1\"")
-                                   "nns-file-test" file))))))
+  (let* ((command (nns--command
+                   (list nns-system-shell "-c" (concat test " \"$1\"") "nns-file-test" file)))
+         (status (apply #'nns--invoke #'call-process (car command) nil nil nil (cdr command))))
     (and (integerp status) (zerop status))))
 
 (defun nns--file-executable-p (function file)
-  ;; Eshell resolves external commands with a native stat, which cannot
-  ;; see /nix; ask a namespace child instead of returning nil.
-  (if (nns--nix-file-p file)
-      (nns--ns-test file "test -x")
-    (funcall function file)))
-
+  (if (nns--nix-file-p file) (nns--ns-test file "test -x") (funcall function file)))
 (defun nns--file-exists-p (function file)
-  (if (nns--nix-file-p file)
-      (nns--ns-test file "test -e")
-    (funcall function file)))
-
+  (if (nns--nix-file-p file) (nns--ns-test file "test -e") (funcall function file)))
 (defun nns--file-regular-p (function file)
-  (if (nns--nix-file-p file)
-      (nns--ns-test file "test -f")
-    (funcall function file)))
+  (if (nns--nix-file-p file) (nns--ns-test file "test -f") (funcall function file)))
 
 (defun nns--eshell-get-path (function &optional literal-p)
-  ;; Eshell's $PATH derives from `exec-path', which never contains the
-  ;; namespace's profile; prepend it so eshell resolves like the child env.
   (let ((path (funcall function literal-p)))
     (if (not (and nns-mode (not nns--inhibit)
-                  (not (file-remote-p default-directory))
-                  path))
+                  (not (file-remote-p default-directory)) path))
         path
-      (let ((bin (directory-file-name (file-name-concat nns-profile "bin"))))
-        (cons bin (remove bin path))))))
+      (let ((bin (concat (directory-file-name (nns--resolved-profile)) "/bin")))
+        (cons "/data/nix/var/nns/bin"
+              (cons bin (remove "/data/nix/var/nns/bin" (remove bin path))))))))
 
 (defun nns--eshell-advice (enable)
   (with-eval-after-load 'esh-util
@@ -142,34 +180,51 @@ hosting app; point this at another profile for a richer PATH."
       (advice-remove 'eshell-get-path #'nns--eshell-get-path))))
 
 ;;;###autoload
+(defun nns-select-profile (profile &optional generation)
+  "Select PROFILE and optional GENERATION for new processes in this buffer.
+Existing processes are not restarted.  With a prefix, prompt for a generation.
+Re-select the current name to resolve its latest target."
+  (interactive (list (read-string "NNS profile name or path: " nns-profile)
+                     (when current-prefix-arg (read-number "Generation: "))))
+  (let ((previous (list nns-profile nns-profile-generation nns--profile-cache)))
+    (setq-local nns-profile profile nns-profile-generation generation nns--profile-cache nil)
+    (condition-case error
+        (message "NNS profile: %s" (nns--resolved-profile))
+      (error
+       (setq-local nns-profile (nth 0 previous) nns-profile-generation (nth 1 previous)
+                   nns--profile-cache (nth 2 previous))
+       (signal (car error) (cdr error))))))
+
+;;;###autoload
 (defun nns-check ()
-  "Test namespace setup from this Emacs process's actual Android domain.
-No root fallback is attempted.  Return diagnostic output on success."
+  "Report this buffer's namespace, pinned profile and editor tool availability.
+No root fallback is attempted.  Missing tools are reported, not installed."
   (interactive)
-  (when (file-remote-p default-directory)
-    (user-error "Run nns-check from a local buffer"))
-  (with-temp-buffer
-    (let* ((status (apply #'nns--invoke #'call-process nns-launcher nil (current-buffer) nil
-                          (cdr (nns--command
-                                (list nns-system-shell "-c"
-                                      "set -e; id; test -d /nix/store; test \"$(id -u)\" = \"$1\"; echo NNS-USERNS-OK"
-                                      "nns-check" (number-to-string (user-uid)))))))
-           (output (buffer-string)))
-      (unless (and (integerp status) (zerop status))
-        (user-error "NNS namespace setup failed (%s): %s" status output))
-      (when (called-interactively-p 'interactive) (message "%s" output))
-      output)))
+  (when (file-remote-p default-directory) (user-error "Run nns-check from a local buffer"))
+  (let ((command (nns--command
+                  (list nns-system-shell "-c"
+                        (concat "set -e; id; test -d /nix/store; test \"$(id -u)\" = \"$1\"; "
+                                "printf 'PROFILE=%s\\nHOME=%s\\n' \"$NNS_PROFILE\" \"$HOME\"; "
+                                "for tool in git bash; do command -v \"$tool\" || "
+                                "printf 'MISSING: %s\\n' \"$tool\"; done; echo NNS-USERNS-OK")
+                        "nns-check" (number-to-string (user-uid))))))
+    (with-temp-buffer
+      (let* ((status (apply #'nns--invoke #'call-process (car command) nil (current-buffer) nil (cdr command)))
+             (output (buffer-string)))
+        (unless (and (integerp status) (zerop status))
+          (user-error "NNS namespace setup failed (%s): %s" status output))
+        (when (called-interactively-p 'interactive) (message "%s" output))
+        output))))
 
 ;;;###autoload
 (define-minor-mode nns-mode
-  "Run local subprocesses with canonical /nix, retaining the app's UID.
-Does not relocate the existing Emacs/ART process or make /nix global.
+  "Run local subprocesses with canonical /nix, retaining the app's UID and HOME.
 Remote/TRAMP processes are left alone.  Disable to run outside NNS."
   :global t :group 'nns
   (when nns-mode
-    (condition-case err
+    (condition-case error
         (nns-check)
-      (error (setq nns-mode nil) (signal (car err) (cdr err)))))
+      (error (setq nns-mode nil) (signal (car error) (cdr error)))))
   (dolist (pair '((call-process . nns--call-process)
                   (call-process-region . nns--call-process-region)
                   (start-process . nns--start-process)
@@ -185,20 +240,20 @@ Remote/TRAMP processes are left alone.  Disable to run outside NNS."
 
 ;;;###autoload
 (defun nns-shell ()
-  "Open an app-UID shell with canonical /nix, without enabling global advice."
+  "Open a shell in the selected profile without adopting another app's HOME."
   (interactive)
   (nns-check)
   (require 'comint)
-  (let ((buffer (get-buffer-create "*NNS*")))
+  (let* ((target (nns--resolved-profile))
+         (selection (list nns-profile nns-profile-generation))
+         (command (nns--command '("bash" "--noprofile" "--norc" "-i")))
+         (buffer (get-buffer-create (format "*NNS: %s*" target))))
     (unless (comint-check-proc buffer)
-      (apply #'nns--invoke #'make-comint-in-buffer "NNS" buffer nns-launcher nil
-             (cdr (nns--command
-                   (list nns-system-shell "-c"
-                         ;; Non-interactive Android mksh: interactive mode
-                         ;; needs a pty the namespace child does not have,
-                         ;; and hangs after echoing commands. comint itself
-                         ;; provides the prompt/history layer.
-                         "exec /nix/var/nix/profiles/profile/bin/bash -i")))))
+      (apply #'nns--invoke #'make-comint-in-buffer "NNS" buffer (car command) nil (cdr command)))
+    (with-current-buffer buffer
+      (setq-local nns-profile (car selection)
+                  nns-profile-generation (cadr selection)
+                  nns--profile-cache (cons selection target)))
     (pop-to-buffer buffer)))
 
 (provide 'nns)

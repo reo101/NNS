@@ -24,6 +24,9 @@ EvolutionX 16, SukiSU Ultra.
 
 ## Outputs
 
+`lib.nnsSystem` evaluates the standalone `nns` module class.
+`nnsModules.default` exports its base module.
+
 From `outputs.nix`: `nns-module`, `nix-enter` (+ `-host`), `nns-dns`,
 `emacs-integration`, `repack-boot`, `cheetah` (bundle), `kernel-cheetah`,
 `test-userns`, `test-emacs`, `test-android`, `android-vm-test`, and matching
@@ -31,12 +34,17 @@ From `outputs.nix`: `nns-module`, `nix-enter` (+ `-host`), `nns-dns`,
 
 ## Status
 
-Launcher, store, bridge, kernel and the VM test: mature, documented in their
-own READMEs. The session & services layer (deployed through rix101) is
-**in progress**: green end-to-end on the device — deploy confirmed, kill tests
-hand-run, and boot/unlock smoke-tested — but docs are partial. Scar-by-scar
-rationale for the migration lives in the commit log (`jj log`), not all of it
-in prose.
+NNS 3.2.0 and its standalone system generation run on cheetah. Root SSH and
+the Nix daemon start before Android unlock. NoD and native Android Emacs
+retain their separate UIDs and homes after unlock.
+
+Historical generation rollback, failed-activation rollback, confirmation
+timeout, and ordered NNS/NoD rollback passed on the phone. The tests restored
+the working deployment and its shared configuration.
+
+See [NNS systems and package profiles](docs/nns-systems.md) for ownership,
+NoD consumer mode, Emacs profile selection, and retention. Build isolation
+remains deferred, see [the research notes](docs/build-isolation.md).
 
 ## Cheetah boot/unlock regression
 
@@ -72,6 +80,9 @@ TRAMP, for example `emacs-gui ~/.zshrc`. The GUI must be running; the NoD
 shell does not start a second Emacs server.
 
 ## Docs
+
+- [docs/nns-systems.md](docs/nns-systems.md): system generations, consumers, and deploy-rs
+- [docs/build-isolation.md](docs/build-isolation.md): current build risks and deferred designs
 
 - [module/README.md](module/README.md) — mechanism, device constraints,
   sessions & supervised services (in progress)

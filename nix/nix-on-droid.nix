@@ -10,9 +10,9 @@
 # The proot-specific activation steps are overridden to write into
 # `build.installationDir` (the app prefix) directly instead of proot-mapped
 # `/bin`, `/usr`, `/etc`. The NoD generation profile
-# (`/nix/var/nix/profiles/nix-on-droid`) is root-writable in an NNS store, so
-# generation switching keeps working; session packages get their own profile
-# at `$HOME/.nix-profile`, which the app UID owns.
+# uses its delegated per-user directory when nns.systemManaged is enabled.
+# Session packages remain in the app-owned `$HOME/.nix-profile`. Legacy
+# configurations retain the original global generation profile.
 #
 # Usage (inside a Nix-on-Droid configuration):
 #
@@ -31,6 +31,7 @@ let
   cfg = config.nns;
 
   installDir = config.build.installationDir;
+  generationProfile = "/nix/var/nix/profiles/per-user/${config.user.userName}/nix-on-droid";
 
   portableServices = import "${pkgs.path}/lib/services/lib.nix" { inherit lib; };
   # The pinned portable base lacks process.environment; newer revisions may
@@ -394,12 +395,33 @@ in
   ###### interface
 
   options = {
+    # Patch the completed package list, not config.environment.packages from
+    # inside one of its own elements. Upstream's CLI hardcodes the old path.
+    environment.packages = mkOption {
+      type = types.listOf types.package;
+      apply = packages: if !(cfg.enable && cfg.systemManaged) then packages else
+        map (package:
+          if lib.isDerivation package && (package.pname or (package.name or "")) == "nix-on-droid"
+          then package.overrideAttrs (previous: {
+            name = "nns-nix-on-droid";
+            buildCommand = previous.buildCommand + ''
+              substituteInPlace "$out/bin/nix-on-droid" --replace-fail \
+                'PROFILE_DIRECTORY="/nix/var/nix/profiles/nix-on-droid"' \
+                ${lib.escapeShellArg "PROFILE_DIRECTORY=${lib.escapeShellArg generationProfile}"}
+            '';
+          }) else package) packages;
+    };
 
     nns = {
       enable = mkEnableOption ''
         NNS launcher-based sessions. Replaces proot: sessions run in private
         user+mount namespaces over the root-owned NNS store, and all store and
         profile writes go through the root nix daemon.
+      '';
+
+      systemManaged = mkEnableOption ''
+        consume an independent NNS system generation. NoD activation cannot
+        configure the daemon or materialize root services in this mode.
       '';
 
       launcher = mkOption {
@@ -504,7 +526,10 @@ in
     nns.services.sessionPath = mkDefault
       "/data/nix/var/nns/bin:/nix/var/nix/profiles/system-profile/bin:${config.user.home}/.nix-profile/bin:/system/bin:/system/xbin";
 
-    assertions = lib.concatLists (lib.mapAttrsToList (name: service:
+    assertions = [{
+      assertion = !cfg.systemManaged || (!cfg.services.enable && cfg.nix.settings == { });
+      message = "System-managed NoD is a consumer: move nns.services and nns.nix.settings into the NNS host configuration";
+    }] ++ lib.concatLists (lib.mapAttrsToList (name: service:
       portableServices.getAssertions [ "nns" "services" "runit" name ] service ++ [
         {
           assertion = builtins.match "[A-Za-z0-9_-]+" name != null
@@ -580,6 +605,21 @@ in
         '';
       });
 
+      activationAfter = mkIf cfg.systemManaged (mkForce ({
+        linkProfile = ''
+          generationDir="$(dirname "$0")"
+          if [[ $generationDir =~ ^${lib.escapeRegex generationProfile}-([0-9]+)-link$ ]]; then
+            $DRY_RUN_CMD nix-env --profile ${lib.escapeShellArg generationProfile} --switch-generation "''${BASH_REMATCH[1]}"
+          else
+            $DRY_RUN_CMD nix-env --profile ${lib.escapeShellArg generationProfile} --set "$_NOD_GENERATION_DIR"
+          fi
+        '';
+      } // lib.optionalAttrs (config.home-manager.config != null) {
+        homeManager = lib.optionalString (config.home-manager.backupFileExtension != null)
+          "HOME_MANAGER_BACKUP_EXT=${lib.escapeShellArg config.home-manager.backupFileExtension} "
+          + "${config.home-manager.config.home.activationPackage}/activate";
+      }));
+
       activation = mkForce ({
         installLogin = /* bash */ ''
           if ! diff ${installDir}/bin/login ${login} > /dev/null; then
@@ -607,7 +647,7 @@ in
         # file is root-owned, so this goes through the session's own su
         # wrapper; a dead shizuku server only delays the settings to the
         # next boot (post-fs-data preserves the block either way).
-        syncNixSettings = /* bash */ ''
+        syncNixSettings = if cfg.systemManaged then "" else /* bash */ ''
           if ! $DRY_RUN_CMD su -c "sh ${nixSettingsUpdater} ${nixSettingsFragment}"; then
             echo "nns: could not sync nix.settings (shizuku down?) -" \
                  "they apply at the next boot instead" >&2

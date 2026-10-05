@@ -17,7 +17,7 @@
         (progn
           (insert (nns-check))
           (nns-mode 1)
-          (let ((status (call-process "/nix/var/nix/profiles/profile/bin/nix" nil t nil "--version")))
+          (let ((status (call-process "nix" nil t nil "--version")))
             (insert (format "\nNix exit: %S\n" status)))
           (nns-mode -1))
       (error (insert (format "FAILED: %S\n" err))))

@@ -20,6 +20,11 @@ class NamespaceTest(unittest.TestCase):
         # Let the host's Nix-linked test interpreter run through the new /nix.
         (self.store / 'store').symlink_to('/.nns-host/nix/store')
         (self.store / 'marker').write_text('canonical-store')
+        self.profile_target = Path(sys.executable).resolve().parents[1]
+        self.profiles = self.store / 'var/nix/profiles'
+        self.profiles.mkdir(parents=True)
+        for name in ('system-profile', 'work', 'work-7-link'):
+            (self.profiles / name).symlink_to('/nix/store/' + self.profile_target.name)
         self.cwd = self.base / 'cwd'
         self.cwd.mkdir()
         self.mounts = Path('/proc/self/mountinfo').read_text()
@@ -31,13 +36,174 @@ class NamespaceTest(unittest.TestCase):
                          'parent mount namespace changed')
         self.temp.cleanup()
 
-    def run_code(self, code, *args, explicit=True, store=None, env=None):
+    def run_code(self, code, *args, explicit=True, store=None, env=None, options=(), umask=-1):
         result = subprocess.run([
-            HELPER, *(['--userns'] if explicit else []),
+            HELPER, *(['--userns'] if explicit else []), *options,
             '--store', str(store or self.store), '--tmpdir', str(self.base),
             '--', sys.executable, '-c', code, *args,
-        ], cwd=self.cwd, text=True, capture_output=True, timeout=20, env=env)
+        ], cwd=self.cwd, text=True, capture_output=True, timeout=20, env=env, umask=umask)
         return result
+
+    def test_profile_selection_and_path_precedence(self):
+        code = '''
+import json, os
+print(json.dumps([os.environ['NNS_PROFILE'], os.environ['PATH'],
+                  os.environ.get('HOME'), os.getcwd()]))
+'''
+        expected = '/nix/store/' + self.profile_target.name
+        inherited_path = '/custom/bin:/usr/bin'
+        for options, resolved in [
+            ((), '/nix/var/nix/profiles/system-profile'),
+            (('--profile', 'work'), expected),
+            (('--profile', 'work', '--generation', '7'), expected),
+            (('--profile', expected), expected),
+        ]:
+            r = self.run_code(code, options=options, env=dict(os.environ, HOME='/tmp/app-home', PATH=inherited_path))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            profile, prefix, home, cwd = json.loads(r.stdout)
+            self.assertEqual(profile, resolved)
+            self.assertEqual(prefix, ':'.join(['/data/nix/var/nns/bin', resolved + '/bin',
+                                                '/nix/var/nix/profiles/system-profile/bin', inherited_path]))
+            self.assertEqual(home, '/tmp/app-home')
+            self.assertTrue(os.path.samefile(cwd, self.cwd))
+
+    def test_private_var_empty_preserves_other_var_entries(self):
+        marker = 'nns-private-' + self.base.name
+        host_marker = Path('/var/empty') / marker
+        existed = host_marker.exists()
+        code = '''
+import json, os, stat, sys
+from pathlib import Path
+empty = Path('/var/empty')
+assert list(empty.iterdir()) == []
+mode = empty.stat()
+(empty / sys.argv[1]).write_text('namespace-only')
+mirrored = all(os.path.samefile('/var/' + name, '/.nns-host/var/' + name)
+               for name in os.listdir('/.nns-host/var') if name != 'empty')
+print(json.dumps([mode.st_uid, mode.st_gid, stat.S_IMODE(mode.st_mode), mirrored, os.umask(0)]))
+'''
+        for _ in range(2):
+            result = self.run_code(code, marker, umask=0o077)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), [os.getuid(), os.getgid(), 0o755, True, 0o077])
+            self.assertEqual(host_marker.exists(), existed)
+
+    def test_private_var_when_original_var_is_absent(self):
+        result = self.run_code('''
+import os, subprocess, sys
+# Rename only the launcher's own tmpfs directory, never the host /var.
+assert os.path.isdir('/.nns-host')
+os.rename('/var', '/var-original')
+result = subprocess.run([sys.argv[1], '--store', '/.nns-host/nix',
+    '--tmpdir', sys.argv[2], '--', sys.executable, '-c',
+    'from pathlib import Path; assert list(Path("/var/empty").iterdir()) == []'],
+    text=True, capture_output=True)
+print(result.stderr, end='')
+sys.exit(result.returncode)
+''', HELPER, str(self.base))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_synthetic_caller_account_records(self):
+        original = Path('/etc/passwd').read_bytes()
+        result = self.run_code('''
+import grp, json, os, pwd, stat
+from pathlib import Path
+account = pwd.getpwuid(os.getuid())
+group = grp.getgrgid(os.getgid())
+assert not os.path.samefile('/etc/passwd', '/.nns-host/etc/passwd')
+assert all(os.path.samefile('/etc/' + name, '/.nns-host/etc/' + name)
+           for name in os.listdir('/.nns-host/etc') if name not in ('passwd', 'group'))
+print(json.dumps([account.pw_name, account.pw_uid, account.pw_gid,
+    account.pw_dir, account.pw_shell, group.gr_gid,
+    stat.S_IMODE(Path('/etc/passwd').stat().st_mode), os.umask(0)]))
+with open('/etc/passwd', 'a') as output:
+    output.write('# namespace-only\\n')
+''', env=dict(os.environ, USER='hosting-user', HOME='/tmp/hosting-home', SHELL='/bin/sh'),
+            umask=0o077)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [
+            'root' if os.getuid() == 0 else 'hosting-user', os.getuid(), os.getgid(),
+            '/tmp/hosting-home', '/bin/sh', os.getgid(), 0o644, 0o077])
+        self.assertEqual(Path('/etc/passwd').read_bytes(), original)
+
+    def test_explicit_etc_keeps_supplied_account_records(self):
+        directory = self.base / 'etc'
+        directory.mkdir()
+        record = f'explicit-user:x:{os.getuid()}:{os.getgid()}:explicit:/explicit-home:/bin/sh\n'
+        (directory / 'passwd').write_text(record)
+        (directory / 'group').write_text(f'explicit-group:x:{os.getgid()}:\n')
+        result = self.run_code('''
+import json, os, pwd
+from pathlib import Path
+account = pwd.getpwuid(os.getuid())
+print(json.dumps([account.pw_name, account.pw_dir, Path('/etc/passwd').read_text()]))
+''', options=('--etc', str(directory)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ['explicit-user', '/explicit-home', record])
+
+    def test_account_record_delimiters_are_rejected(self):
+        for key, value in [('HOME', '/tmp/invalid:home'), ('USER', 'invalid\nuser'),
+                           ('SHELL', '/bin/sh\ninvalid')]:
+            if key == 'USER' and os.getuid() == 0:
+                continue  # Root keeps its administrative account name.
+            result = self.run_code('raise Exception("must not execute")',
+                                   env=dict(os.environ, **{key: value}))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('must not execute', result.stderr)
+
+    def test_namespace_bootstrap_without_infrastructure_profile(self):
+        (self.profiles / 'system-profile').unlink()
+        result = self.run_code('print("bootstrap")')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'bootstrap')
+
+    def test_inherited_configuration_defaults(self):
+        env = dict(os.environ, NIX_CONF_DIR='/custom/nix-config', NIX_REMOTE='custom-remote')
+        r = self.run_code('import os,json; print(json.dumps([os.environ["NIX_CONF_DIR"], os.environ["NIX_REMOTE"]]))', env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), ['/custom/nix-config', 'custom-remote'])
+        for missing, defaults in [('NIX_CONF_DIR', ['/data/nix/etc/nix', 'custom-remote']),
+                                  ('NIX_REMOTE', ['/custom/nix-config', 'daemon' if os.getuid() != 0 else 'local'])]:
+            partial = dict(env)
+            partial.pop(missing)
+            r = self.run_code('import os,json; print(json.dumps([os.environ["NIX_CONF_DIR"], os.environ["NIX_REMOTE"]]))', env=partial)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout), defaults)
+        env.pop('NIX_CONF_DIR')
+        env.pop('NIX_REMOTE')
+        r = self.run_code('import os,json; print(json.dumps([os.environ["NIX_CONF_DIR"], os.environ["NIX_REMOTE"]]))', env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), ['/data/nix/etc/nix', 'daemon' if os.getuid() != 0 else 'local'])
+
+    def test_bare_command_uses_constructed_path(self):
+        inherited_bin = self.base / 'inherited-bin'
+        inherited_bin.mkdir()
+        decoy = inherited_bin / 'python3'
+        decoy.write_text('#!/bin/sh\nprintf inherited-path\n')
+        decoy.chmod(0o755)
+        env = dict(os.environ, PATH=str(inherited_bin))
+        r = subprocess.run([
+            HELPER, '--profile', 'work', '--store', str(self.store),
+            '--tmpdir', str(self.base), '--', 'python3', '-c',
+            'import os; print(os.environ["NNS_PROFILE"])',
+        ], cwd=self.cwd, text=True, capture_output=True, timeout=20, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), '/nix/store/' + self.profile_target.name)
+
+    def test_invalid_and_missing_profiles_are_rejected(self):
+        for options in [
+            ('--profile', '../escape'),
+            ('--profile', '-invalid'),
+            ('--profile', '.invalid'),
+            ('--profile', 'work', '--generation', '0'),
+            ('--profile', 'work', '--generation', '1x'),
+            ('--profile', '/nix/store/missing-profile'),
+            ('--profile', 'missing'),
+            ('--profile', '/nix/store/missing-profile', '--generation', '1'),
+        ]:
+            r = self.run_code('raise Exception("must not execute")', options=options)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertNotIn('must not execute', r.stderr)
 
     def test_identity_cwd_canonical_path_and_caps(self):
         r = self.run_code('''

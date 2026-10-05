@@ -8,6 +8,7 @@
 # service init spawns post-pivot crash-loops).
 #
 MODDIR=${0%/*}
+export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin
 LOG=/data/local/tmp/nix-post-fs-data.log
 
 exec > $LOG 2>&1
@@ -23,6 +24,9 @@ chmod 755 /data/nix /data/nix/store /data/nix/var
 # directories to bluetooth:960, and sshd StrictModes rejects any
 # AuthorizedKeysFile path component not owned by root or the user.
 chown 0:0 /data/nix
+. "$MODDIR/system-generation.sh"
+NNS_SYSTEM_GENERATION=false
+if nns_system_selected; then NNS_SYSTEM_GENERATION=true; fi
 chmod 1777 /data/nix/tmp
 # init recreates /tmp (shell:shell 0771) at every boot; sessions run as
 # the app uid and need a standard sticky temp dir there (deploy-rs's
@@ -70,6 +74,7 @@ if [ -w /proc/sys/kernel/seccomp_bypass_paths ]; then
   echo /data/nix/bin/nix-enter > /proc/sys/kernel/seccomp_bypass_paths
 fi
 
+if [ "$NNS_SYSTEM_GENERATION" = false ]; then
 # Nix wants CA certificates; Android ships no /etc/ssl/certs, so point
 # nix.conf at the nss-cacert bundle already inside the store (referenced
 # via /nix, the path visible inside launcher sessions).
@@ -95,23 +100,27 @@ rm -f /data/nix/etc/nix/.nns-managed
 # the daemon's staged /etc, see stage-etc.sh) are nix trusted-users.
 if [ -f /data/nix/etc/nix/nix.conf ]; then
   sed -i '/^trusted-users/d' /data/nix/etc/nix/nix.conf
-  echo 'trusted-users = root @nix-trusted' >> /data/nix/etc/nix/nix.conf
+  printf '\ntrusted-users = root @nix-trusted\n' >> /data/nix/etc/nix/nix.conf
 fi
 [ -f /data/nix/etc/nss-trusted ] || : > /data/nix/etc/nss-trusted
+fi
 
 # nns.services state, all DE so it exists before first unlock: services/ is
 # activation-owned (app uid writes run-script symlinks into it), ready/ takes
-# the unlock markers (root-only), /data/ve is sshd's privsep chroot (contents
-# are provisioned from staged NSS in service.sh, after stage-etc runs).
+# the unlock markers (root-only). The launcher supplies /var/empty privately.
 mkdir -p /data/nix/var/nns/services /data/nix/var/nns/ready \
-  /data/nix/var/nns/bin /data/nix/var/sshd /data/ve/etc
+  /data/nix/var/nns/bin /data/nix/var/sshd
+if [ "$NNS_SYSTEM_GENERATION" = true ]; then
+  chown 0:0 /data/nix/var/nns /data/nix/var/nns/bin
+  chmod 755 /data/nix/var/nns /data/nix/var/nns/bin
+else
 chown @APP_UID@:@APP_GID@ /data/nix/var/nns/services /data/nix/var/nns/bin /data/nix/var/sshd
 # The app's SELinux categories derive from its uid (c66,... above = uid
 # 10578); mirror the app data dir's live context instead of hardcoding it.
 chcon "$(ls -Zd /data/data/@APP_ID@ | tr -s ' ' | cut -d ' ' -f 1)" \
   /data/nix/var/nns/services
 chcon u:object_r:system_data_file:s0 /data/nix/var/sshd
-chmod 755 /data/ve /data/ve/etc
+fi
 
 # Shizuku-backed su/sudo/rish for every launcher session. /data/nix/var/nns/bin
 # is already the first sessionPath entry and nix-enter prepends it for bare
@@ -139,8 +148,12 @@ chmod 644 /data/nix/etc/app-id
 # control state never survive a boot - a stale 'unlock' marker would let
 # startAt=unlock services race CE, stale supervise pids recycle like the
 # daemon's pid did (Bitwarden).
-rm -f /data/nix/var/nns/ready/*
-rm -rf /data/nix/var/nns/services/*/supervise
+if [ "$NNS_SYSTEM_GENERATION" = true ]; then
+  rm -f /data/nix/var/nns/supervisor.pid
+else
+  rm -f /data/nix/var/nns/ready/*
+  rm -rf /data/nix/var/nns/services/*/supervise
+fi
 
 # nix store gc keeps only what is reachable from /nix/var/nix/gcroots.
 # The profile links (system-profile, nix-on-droid generations) are

@@ -8,7 +8,7 @@
   appId ? throw "nix/module.nix: appId not supplied; pass the host's Android application id" }:
 stdenvNoCC.mkDerivation {
   pname = "nns-module-${arch}";
-  version = "3.1.0";
+  version = "3.2.0";
   src = lib.fileset.toSource {
     root = ../module;
     fileset = lib.fileset.unions [
@@ -17,6 +17,7 @@ stdenvNoCC.mkDerivation {
       ../module/post-fs-data.sh
       ../module/service.sh
       ../module/stage-etc.sh
+      ../module/system-generation.sh
       ../module/etc/profile
       ../module/etc/nix/nix.conf
     ];
@@ -33,7 +34,7 @@ stdenvNoCC.mkDerivation {
     cp ${dns}/lib/libnns-dns.so module/lib/libnns-dns.so
     cp ${rish}/bin/rish ${rish}/bin/su ${rish}/bin/sudo ${rish}/bin/rish-probe module/bin/
     cp ${rish}/lib/rish.dex module/lib/rish.dex
-    cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh module/
+    cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh system-generation.sh module/
     cp ${policy} module/sepolicy.rule
     substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
     # The app uid/gid/appId are assigned per install; every build names them.

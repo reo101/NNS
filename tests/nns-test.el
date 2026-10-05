@@ -12,14 +12,18 @@
          (default-directory "/tmp/")
          (temporary-file-directory "/tmp/cache/")
          (nns-launcher "/public/nix-enter")
-         (nns-store "/backing") (nns-profile "/nix/profile"))
+         (nns-store "/backing") (nns-profile "/nix/profile")
+         (nns-profile-generation nil)
+         (nns--profile-cache '(("/nix/profile" nil) . "/nix/profile")))
      ,@body))
 
 (ert-deftest nns-arguments-are-not-shell-interpolated ()
   (nns-test--configured
-   (should (equal (nns--command '("git" "has spaces" "$(touch /bad)" ""))
-                  '("/public/nix-enter" "--userns" "--store" "/backing"
-                    "--tmpdir" "/tmp/cache" "--" "git" "has spaces" "$(touch /bad)" "")))))
+   (let ((command (nns--command '("git" "has spaces" "$(touch /bad)" ""))))
+     (should (equal (seq-take command 10)
+                    '("/public/nix-enter" "--userns" "--store" "/backing"
+                      "--tmpdir" "/tmp/cache" "--profile" "/nix/profile" "--" "/system/bin/sh")))
+     (should (equal (last command 4) '("git" "has spaces" "$(touch /bad)" ""))))))
 
 (ert-deftest nns-call-process-keeps-io-arguments ()
   (nns-test--configured
@@ -49,16 +53,21 @@
   (nns-test--configured
    (let ((default-directory "/ssh:example:/tmp/"))
      (should (equal (nns--start-process #'list "git" nil "git" "status")
-                    '("git" nil "git" "status"))))
+                    '("git" nil "git" "status")))
+     (cl-letf (((symbol-function 'nns--ns-test)
+                (lambda (&rest _) (error "Remote predicates entered the namespace"))))
+       (dolist (predicate '(nns--file-executable-p nns--file-exists-p nns--file-regular-p))
+         (should (equal (funcall predicate #'identity "/nix/profile/bin/git")
+                        "/nix/profile/bin/git")))))
    (let ((nns--inhibit t)) (should-not (nns--wrap-p "git")))
    (should-not (nns--wrap-p nns-launcher))))
 
 (ert-deftest nns-environment-is-process-local ()
   (nns-test--configured
    (let ((before (getenv "PATH")))
-     (should (equal (nns--invoke (lambda () (getenv "PATH")))
-                    (concat "/nix/profile/bin:" before)))
-     (should (equal (getenv "PATH") before)))))
+     (should (equal (nns--invoke (lambda () (getenv "PATH"))) before))
+     (should (equal (getenv "PATH") before))
+     (should (equal (nns--invoke (lambda () (getenv "NIX_REMOTE"))) "daemon")))))
 
 (ert-deftest nns-uses-real-exec-only-for-its-children ()
   (let ((android-use-exec-loader t))
@@ -89,18 +98,77 @@
 (ert-deftest nns-eshell-path-prepends-profile ()
   (nns-test--configured
    (should (equal (nns--eshell-get-path (lambda (&rest _) '("/data/bin")))
-                  '("/nix/profile/bin" "/data/bin")))
+                  '("/data/nix/var/nns/bin" "/nix/profile/bin" "/data/bin")))
    (should (equal (nns--eshell-get-path (lambda (&rest _) '("/nix/profile/bin")))
-                  '("/nix/profile/bin")))
+                  '("/data/nix/var/nns/bin" "/nix/profile/bin")))
    (let ((nns-mode nil))
      (should (equal (nns--eshell-get-path (lambda (&rest _) '("/data/bin")))
                     '("/data/bin"))))))
+
+(ert-deftest nns-profile-selection-resolves-once-in-originating-buffer ()
+  (nns-test--configured
+   (let ((nns-profile "development") (nns-profile-generation 3)
+         (nns--profile-cache nil) (calls 0))
+     (cl-letf (((symbol-function 'call-process)
+                (lambda (&rest args)
+                  (setq calls (1+ calls))
+                  (should (member "development" args))
+                  (should (member "--generation" args))
+                  (should (member "3" args))
+                  (insert "/nix/store/retained-development") 0)))
+       (should (equal (nns--resolved-profile) "/nix/store/retained-development"))
+       (should (equal (nns--resolved-profile) "/nix/store/retained-development"))
+       (should (= calls 1))))))
+
+(ert-deftest nns-profile-errors-do-not-fall-back ()
+  (nns-test--configured
+   (let ((nns-profile "missing") (nns--profile-cache nil))
+     (cl-letf (((symbol-function 'call-process) (lambda (&rest _) (insert "missing profile") 1)))
+       (should-error (nns--resolved-profile) :type 'user-error)))
+   (let ((nns-profile "../development"))
+     (should-error (nns--resolved-profile) :type 'user-error))
+   (let ((nns-profile-generation 0))
+     (should-error (nns--resolved-profile) :type 'user-error))
+   (cl-letf (((symbol-function 'call-process) (lambda (&rest _) 1)))
+     (should-not (nns--executable-find (lambda (&rest _) "/host/git") "git")))))
+
+(ert-deftest nns-temporary-output-buffer-does-not-change-selection ()
+  (nns-test--configured
+   (let ((nns-profile "project")
+         (nns--profile-cache '(("project" nil) . "/nix/store/project")))
+     (cl-letf (((symbol-function 'call-process)
+                (lambda (&rest args)
+                  (should (member "/nix/store/project" args))
+                  (insert "/nix/store/project/bin/git") 0)))
+       (should (equal (nns--executable-find #'ignore "git") "/nix/store/project/bin/git"))))))
 
 (ert-deftest nns-probe-fails-closed ()
   (nns-test--configured
    (cl-letf (((symbol-function 'call-process)
               (lambda (&rest _) (insert "unshare user namespace: errno 1") 1)))
      (should-error (nns-check) :type 'user-error))))
+
+(ert-deftest nns-shell-retains-selection-in-its-output-buffer ()
+  (require 'comint)
+  (nns-test--configured
+   (let (buffers)
+     (unwind-protect
+         (cl-letf (((symbol-function 'nns-check) (lambda () "OK"))
+                   ((symbol-function 'comint-check-proc) (lambda (_) nil))
+                   ((symbol-function 'make-comint-in-buffer)
+                    (lambda (_ buffer &rest _)
+                      (push buffer buffers)
+                      (with-current-buffer buffer (comint-mode))))
+                   ((symbol-function 'pop-to-buffer) #'identity))
+           (nns-shell)
+           (with-current-buffer (car buffers)
+             (should (equal nns-profile "/nix/profile"))
+             (should (equal (cdr nns--profile-cache) "/nix/profile")))
+           (setq nns-profile "/nix/second"
+                 nns--profile-cache '(("/nix/second" nil) . "/nix/second"))
+           (nns-shell)
+           (should-not (eq (car buffers) (cadr buffers))))
+       (mapc #'kill-buffer buffers)))))
 
 (ert-deftest nns-mode-can-be-disabled-cleanly ()
   (cl-letf (((symbol-function 'nns-check) (lambda () "OK")))

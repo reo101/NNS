@@ -196,6 +196,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
             }];
           }).config.system.build.toplevel;
           nns-reconfiguration = import ./tests/test-nns-reconfiguration.nix { inherit pkgs; };
+          nns-nix-versions = import ./tests/test-nns-nix-versions.nix { inherit pkgs; };
           nns-modular-services =
             assert import ./tests/test-modular-services.nix { inherit pkgs; };
             pkgs.runCommand "check-nns-modular-services" { } "touch $out";

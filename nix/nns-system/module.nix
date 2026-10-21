@@ -48,6 +48,7 @@ let
   ) cfg.environment.profiles;
   infrastructure = import ../system-profile.nix {
     phonePkgs = pkgs;
+    nixPackage = cfg.nix.package;
     extraPaths = [
       pkgs.util-linux
       pkgs.openssh
@@ -263,6 +264,12 @@ in
       default = [ ];
       internal = true;
     };
+    nix.package = mkOption {
+      type = types.package;
+      default = pkgs.nix;
+      defaultText = lib.literalExpression "pkgs.nix";
+      description = "Nix package for the daemon and administrative system profile.";
+    };
     nix.settings = mkOption {
       type = types.attrsOf (
         types.oneOf [
@@ -402,7 +409,7 @@ in
     system.build.toplevel = generation;
     services.runit = {
       nix-daemon.process = {
-        argv = [ "${pkgs.nix}/bin/nix-daemon" ];
+        argv = [ "${cfg.nix.package}/bin/nix-daemon" ];
         environment.NIX_REMOTE = "local";
       };
       sshd = lib.mkIf cfg.services.openssh.enable {

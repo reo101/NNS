@@ -34,11 +34,16 @@ let
       };
     }
   ];
+  selectedNix = evaluate [ { nix.package = pkgs.nixVersions.latest; } ];
   rejects =
     module: !(builtins.tryEval (evaluate [ module ]).config.system.build.toplevel.drvPath).success;
 in
 assert valid.config.system.build.toplevel.type == "derivation";
 assert valid.config.accounts.root.uid == 0;
+assert valid.config.nix.package == pkgs.nix;
+assert selectedNix.config.services.runit.nix-daemon.process.argv == [
+  "${pkgs.nixVersions.latest}/bin/nix-daemon"
+];
 assert valid.config.services.openssh.authorizedRootKeys == [ "ssh-ed25519 AAAAROOT root" ];
 assert valid.config.environment.profiles.development.variables.EDITOR == "emacsclient -t";
 assert valid.config.services.runit.sshd.process.argv != [ ];

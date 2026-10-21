@@ -50,6 +50,8 @@ nns.lib.nnsSystem {
 
 The UID and GID in this example are device-specific. They must match the installed app. Root SSH uses only `authorizedRootKeys`. It does not read the app's key file. App-owned key files are read after dropping to that account's UID and GID.
 
+`nix.package` selects Nix for the daemon and administrative system profile. It defaults to `pkgs.nix`. Set `nix.package = pkgs.nixVersions.latest` to select the latest package.
+
 `nix.settings` supplies daemon configuration. `services.runit.<name>` accepts nixpkgs portable service modules with `process.argv` and `process.environment`. Its NNS options are `nns.enable`, `nns.startAt = "boot" | "unlock"`, and `nns.after`.
 
 Service executables use store paths or Android system binaries. Root service PATH never includes an app profile. Nested services, `configData`, reload commands, notification protocols, and service PATH overrides are rejected. Dependencies must be enabled and acyclic.
@@ -79,6 +81,8 @@ nns.systemManaged = true;
 ```
 
 Remove the legacy `nns-sshd` import and move `nns.services` and `nns.nix.settings` into the NNS host. Consumer mode rejects daemon configuration and enabled root service materialization.
+
+NoD activation reports the selected client version and the running daemon version. A successful daemon connection is required. Different versions produce a warning, not an activation failure. A successful connection does not guarantee that every feature is available.
 
 NoD retains its login, app HOME, terminal files, package installation, and Home Manager activation. Its existing CLI is patched to use the delegated generation profile. Its generation profile uses `/nix/var/nix/profiles/per-user/<account>/nix-on-droid`. This device-encrypted directory stays visible to garbage collection before unlock. NoD cannot write NNS's root service directory.
 

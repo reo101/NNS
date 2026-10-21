@@ -8,6 +8,7 @@
 {
   lib ? null,
   phonePkgs,
+  nixPackage ? phonePkgs.nix,
   # Extra packages to merge into the profile.
   extraPaths ? [ ],
 }:
@@ -15,7 +16,7 @@ phonePkgs.buildEnv {
   name = "nns-system-profile";
   paths = with phonePkgs;
     [
-      nix
+      nixPackage
       runit
       socat
       busybox
@@ -35,5 +36,5 @@ phonePkgs.buildEnv {
       exit 1
     }
   '';
-  passthru = { inherit extraPaths; };
+  passthru = { inherit extraPaths nixPackage; };
 }

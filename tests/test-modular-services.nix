@@ -14,6 +14,7 @@ let
         config = {
           _module.freeformType = lib.types.lazyAttrsOf lib.types.anything;
           nns.enable = true;
+          nix.package = pkgs.nix;
           nns.services.enable = true;
           nns.services.runit.example = service;
           user.home = "/data/data/com.termux.nix/files/home";
@@ -82,6 +83,8 @@ in
 assert consumerCommand.drvPath != "";
 assert errors consumer == [ ];
 assert consumer.config.build.activation.syncNixSettings == "";
+assert lib.hasInfix (builtins.unsafeDiscardStringContext "${pkgs.nix}/bin/nix") consumer.config.build.activationBefore.checkNixVersions;
+assert !(valid.config.build.activationBefore ? checkNixVersions);
 assert !(consumer.config.build.activation ? materializeServices);
 assert lib.hasInfix "/nix/var/nix/profiles/per-user/nix/nix-on-droid" consumer.config.build.activationAfter.linkProfile;
 assert lib.hasInfix "HOME_MANAGER_BACKUP_EXT=backup" consumerHome.config.build.activationAfter.homeManager;

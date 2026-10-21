@@ -597,6 +597,12 @@ in
           $DRY_RUN_CMD ln $VERBOSE_ARG --symbolic --force ${config.environment.usrBinEnv} ${installDir}/usr/bin/.env.tmp
           $DRY_RUN_CMD mv $VERBOSE_ARG ${installDir}/usr/bin/.env.tmp ${installDir}/usr/bin/env
         '';
+      } // lib.optionalAttrs cfg.systemManaged {
+        checkNixVersions = ''
+          $DRY_RUN_CMD ${pkgs.coreutils}/bin/env NIX_CONF_DIR=/data/nix/etc/nix \
+            ${pkgs.runtimeShell} ${./check-nix-versions.sh} \
+            ${config.nix.package}/bin/nix ${pkgs.jq}/bin/jq
+        '';
       } // lib.optionalAttrs (config.home-manager.config != null && config.home-manager.useUserPackages) {
         setPriorityHomeManagerPath = /* bash */ ''
           if nix-env -q | grep '^home-manager-path$'; then

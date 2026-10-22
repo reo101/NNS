@@ -11,6 +11,23 @@ Output: `Image`, `config`, `System.map`, `vmlinux.symvers`, `kernel.release`,
 and the ROM-specific `avb.json`. No vendor modules, DTB, ramdisk, ROM images,
 private keys, or flashing operations are included.
 
+For built-in Btrfs with POSIX ACL support, build the separate variant:
+
+```sh
+nix build .#kernel-cheetah-btrfs
+```
+
+The default `kernel-cheetah` keeps its existing feature selection.
+Neither package formats, converts, or mounts `/data`.
+The Btrfs variant requires its own boot and filesystem tests before deployment.
+It passed temporary boot and installation to Cheetah's `boot_a` on 2026-10-22.
+Tests covered file I/O, reflink copy-on-write, a read-only snapshot, remounting, and offline metadata and data checksum checks.
+The Nix daemon, Wi-Fi and 321 loaded modules remained operational.
+The vbmeta and inactive boot partition hashes did not change. Android `/data` remains F2FS.
+
+Global SELinux stayed enforcing. Filesystem tests used the existing permissive `ksu` root domain, which does not block denied access.
+The test filesystem was unlabeled. These results do not validate ordinary-app access or a Btrfs-backed Nix store.
+
 ## Root implementation
 
 The current integration targets **SukiSU Ultra's official `builtin` branch**,

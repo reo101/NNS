@@ -26,6 +26,7 @@
         appId = "com.termux.nix";
       };
       kernel = pkgs.callPackage ../kernel { inherit sources clang; };
+      kernelBtrfs = kernel.override { enableBtrfs = true; };
       repacker = pkgs.writeShellApplication {
         name = "nns-repack-boot";
         runtimeInputs = [ pkgs.python3 ];
@@ -56,6 +57,7 @@
       packages = {
         nns-module-cheetah = moduleCheetah;
         kernel-cheetah = kernel;
+        kernel-cheetah-btrfs = kernelBtrfs;
         clang-cheetah = clang;
         sukisu-manager = sources.sukisuManager;
         repack-boot = repacker;

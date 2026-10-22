@@ -15,9 +15,10 @@
   pkg-config,
   pahole,
   which,
+  enableBtrfs ? false,
 }:
 stdenv.mkDerivation {
-  pname = "cheetah-kernel";
+  pname = if enableBtrfs then "cheetah-kernel-btrfs" else "cheetah-kernel";
   version = "6.1.162-sukisu-nns";
   src = sources.pantah;
   nativeBuildInputs = [
@@ -93,8 +94,15 @@ stdenv.mkDerivation {
     cp ${./rom.config} out/.config
     make "''${flags[@]}" olddefconfig
     cat ${./nns.config} >> out/.config
+    ${lib.optionalString enableBtrfs ''
+      printf '\nCONFIG_BTRFS_FS=y\nCONFIG_BTRFS_FS_POSIX_ACL=y\n' >> out/.config
+    ''}
     make "''${flags[@]}" olddefconfig
     python3 ${./check.py} out ${./avb.json} --config-only
+    ${lib.optionalString enableBtrfs ''
+      grep -Fxq 'CONFIG_BTRFS_FS=y' out/.config
+      grep -Fxq 'CONFIG_BTRFS_FS_POSIX_ACL=y' out/.config
+    ''}
     # configs.c embeds config_data.gz via assembler .incbin, invisible to the
     # C preprocessor cache. Never reuse that object across resolved configs.
     export SCCACHE_C_CUSTOM_CACHE_BUSTER="$(sha256sum out/.config | cut -d' ' -f1)"
@@ -125,7 +133,8 @@ stdenv.mkDerivation {
     runHook postInstall
   '';
   meta = {
-    description = "Cheetah ACK kernel with SukiSU Ultra, SuSFS, USER_NS and USB HID";
+    description = "Cheetah ACK kernel with SukiSU Ultra, SuSFS, USER_NS and USB HID"
+      + lib.optionalString enableBtrfs " and built-in Btrfs";
     platforms = [ "x86_64-linux" ];
     license = lib.licenses.gpl2Only;
   };

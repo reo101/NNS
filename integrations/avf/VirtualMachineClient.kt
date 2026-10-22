@@ -146,6 +146,7 @@ object VirtualMachineClient {
         var sawRunning = false
         var deadline = System.currentTimeMillis() + 600_000
         var lastStatus = -1
+        var timedOut = true
         while (System.currentTimeMillis() < deadline) {
             val status = vm.javaClass.getMethod("getStatus").invoke(vm) as Int
             if (status != lastStatus) {
@@ -155,6 +156,7 @@ object VirtualMachineClient {
             if (status == 1) {
                 sawRunning = true
             } else if (sawRunning && status == 0) {
+                timedOut = false
                 break
             }
             drain(console, "console")
@@ -169,6 +171,7 @@ object VirtualMachineClient {
                 stopFailed.printStackTrace()
             }
         }
+        if (timedOut) throw IllegalStateException("VM timed out after 600000 ms")
         Thread.sleep(2_000)
         drain(console, "console")
         drain(logs, "log")
@@ -213,6 +216,7 @@ object VirtualMachineClient {
         val logPipe = ParcelFileDescriptor.createPipe()
         var instance: Any? = null
         var running = false
+        var timedOut = true
         try {
             LocalSocket().use { socket ->
                 socket.connect(LocalSocketAddress(socketPath, LocalSocketAddress.Namespace.FILESYSTEM))
@@ -245,6 +249,7 @@ object VirtualMachineClient {
                 drain(logs, "log")
                 if (state == 6) { // VirtualMachineState.DEAD
                     running = false
+                    timedOut = false
                     break
                 }
                 Thread.sleep(500)
@@ -257,6 +262,7 @@ object VirtualMachineClient {
                 logPipe.forEach { it.close() }
             }
         }
+        if (timedOut) throw IllegalStateException("VM timed out after 600000 ms")
     }
 
     private fun buildPayloadImage(

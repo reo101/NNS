@@ -195,6 +195,12 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           }).config.system.build.toplevel;
           nns-reconfiguration = import ./tests/test-nns-reconfiguration.nix { inherit pkgs; };
           nns-nix-versions = import ./tests/test-nns-nix-versions.nix { inherit pkgs; };
+          avf-client-timeout = pkgs.runCommand "check-avf-client-timeout" {
+            nativeBuildInputs = [ pkgs.python3 pkgs.kotlin pkgs.jdk17 ];
+          } ''
+            python3 ${./tests/test-avf-timeout.py} ${./integrations/avf/VirtualMachineClient.kt}
+            touch "$out"
+          '';
           nns-nod-consumer =
             assert import ./tests/test-nod-consumer.nix { inherit pkgs; };
             pkgs.runCommand "check-nns-nod-consumer" { } "touch $out";

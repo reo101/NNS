@@ -50,6 +50,26 @@ nns.lib.nnsSystem {
 
 The UID and GID in this example are device-specific. They must match the installed app. Root SSH uses only `authorizedRootKeys`. It does not read the app's key file. App-owned key files are read after dropping to that account's UID and GID.
 
+An account is a Unix identity record for an existing UID. Declaring an account does not create an Android user or app.
+
+Set `accounts.<name>.nixTrusted = true` to grant Nix daemon administration privileges. The default is `false`.
+
+```nix
+accounts.emacs = {
+  uid = 10733;
+  gid = 10733;
+  home = "/data/data/org.gnu.emacs/files";
+  shell = "/system/bin/false";
+  nixTrusted = true;
+};
+```
+
+NNS lists enabled accounts in the daemon's private `nix-trusted` group. The default `trusted-users` list contains `root` and `@nix-trusted`. If you override that list, retain `@nix-trusted` to use account trust flags. The group name `nix-trusted` and GID 30000 are reserved. Android's group files and process group memberships do not change.
+
+Daemon trust grants root-level control through Nix. It is separate from store-read access, package profiles, and SSH authorization. Untrusted accounts can still use the daemon under its normal restrictions. UID 0 remains trusted independently of the flag.
+
+Activation restarts the daemon when group membership changes. Trust changes apply to new daemon connections. Setting the flag back to `false` removes the account from the generated group.
+
 `nix.package` selects Nix for the daemon and administrative system profile. It defaults to `pkgs.nix`. Set `nix.package = pkgs.nixVersions.latest` to select the latest package.
 
 `nix.settings` supplies daemon configuration. `services.runit.<name>` accepts nixpkgs portable service modules with `process.argv` and `process.environment`. Its NNS options are `nns.enable`, `nns.startAt = "boot" | "unlock"`, and `nns.after`.
@@ -89,7 +109,7 @@ NoD retains its login, app HOME, terminal files, package installation, and Home 
 
 The rix101 example lives in `hosts/nns/cheetah`. Its deploy node contains `nns` and `nod` profiles, in that order. Both copy store paths through root SSH. The NNS profile uses `/nix/var/nix/profiles/nns-system`.
 
-Before NoD activation, an immutable helper drops to the app's UID and GID. It clears supplementary groups and sets the app's HOME. The NoD deployment profile and confirmation files stay in app-writable directories. NoD remains an untrusted daemon client. Root transport permits unsigned local outputs without granting that trust to the app.
+Before NoD activation, an immutable helper drops to the app's UID and GID. It clears supplementary groups and sets the app's HOME. The NoD deployment profile and confirmation files stay in app-writable directories. `accounts.nix-on-droid.nixTrusted` controls NoD's daemon trust and defaults to `false`. Root transport alone does not grant the app daemon trust. Cheetah explicitly trusts NoD and Emacs.
 
 Both profiles use deploy-rs `activate.custom`. The NNS command is `$PROFILE/activate switch`.
 
@@ -109,7 +129,11 @@ nix-enter --profile /nix/store/HASH-environment -- git --version
 
 The launcher sets PATH and NNS_PROFILE. It does not source shell exports for raw commands. Emacs loads the profile's exports before each subprocess. Android's interactive shell can load them through the module client profile.
 
-Without `--etc`, the launcher creates private `passwd` and `group` files for the caller's actual UID and GID. HOME and SHELL supply the account fields. Missing values use `/` and `/bin/sh`. The account name uses USER, or `uid<UID>` when USER is absent or empty. UID 0 keeps the name `root`. Fields cannot contain colons or newlines.
+Without `--etc`, the launcher creates private `passwd` and `group` files for the caller's actual UID and GID. It reads registered account names from `system-profile/etc/nns/passwd`. This file belongs to the administrative infrastructure profile, not the selected package profile.
+
+For a registered UID, the account name also supplies USER and LOGNAME. If the configured GID matches the actual GID, the private group uses that name too. Neither numeric ID changes. HOME and SHELL retain the caller's environment values, even when the account declaration has a different home or a disabled login shell.
+
+For an undeclared UID, the launcher keeps the inherited USER name, or `uid<UID>` when USER is absent or empty. Missing HOME and SHELL values use `/` and `/bin/sh`. UID 0 keeps the name `root`. Fields cannot contain colons or newlines. The name change applies to subprocess namespaces, not Android's native Emacs login-name cache.
 
 Other `/etc` entries still reference the original tree. The host name-service cache is hidden so it cannot override these records. Explicit `--etc` remains authoritative for NoD and supervised services. Neither form changes Android's account files or the kernel identity.
 

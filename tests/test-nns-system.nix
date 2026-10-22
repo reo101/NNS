@@ -35,11 +35,28 @@ let
     }
   ];
   selectedNix = evaluate [ { nix.package = pkgs.nixVersions.latest; } ];
+  trustedAccount = evaluate [
+    {
+      accounts.editor = {
+        uid = 1002;
+        gid = 1002;
+        home = "/home/editor";
+        nixTrusted = true;
+      };
+    }
+  ];
   rejects =
     module: !(builtins.tryEval (evaluate [ module ]).config.system.build.toplevel.drvPath).success;
 in
 assert valid.config.system.build.toplevel.type == "derivation";
 assert valid.config.accounts.root.uid == 0;
+assert !valid.config.accounts.emacs.nixTrusted;
+assert trustedAccount.config.accounts.editor.nixTrusted;
+assert
+  valid.config.nix.settings.trusted-users == [
+    "root"
+    "@nix-trusted"
+  ];
 assert valid.config.nix.package == pkgs.nix;
 assert selectedNix.config.services.runit.nix-daemon.process.argv == [
   "${pkgs.nixVersions.latest}/bin/nix-daemon"
@@ -78,6 +95,20 @@ assert rejects {
     uid = 0;
     gid = 1;
     home = "/tmp";
+  };
+};
+assert rejects {
+  accounts.nix-trusted = {
+    uid = 1002;
+    gid = 1002;
+    home = "/home/reserved";
+  };
+};
+assert rejects {
+  accounts.invalid = {
+    uid = 1002;
+    gid = 30000;
+    home = "/home/invalid";
   };
 };
 assert rejects { services.runit.invalid.process.argv = [ ]; };

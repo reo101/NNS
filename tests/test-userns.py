@@ -126,7 +126,57 @@ with open('/etc/passwd', 'a') as output:
             '/tmp/hosting-home', '/bin/sh', os.getgid(), 0o644, 0o077])
         self.assertEqual(Path('/etc/passwd').read_bytes(), original)
 
+    def publish_account_records(self, records):
+        infrastructure = self.base / 'infrastructure'
+        registry = infrastructure / 'etc/nns/passwd'
+        registry.parent.mkdir(parents=True)
+        registry.write_text(records)
+        (self.profiles / 'system-profile').unlink()
+        (self.profiles / 'system-profile').symlink_to(infrastructure)
+
+    def test_registered_account_name_preserves_numeric_identity_and_home(self):
+        name = 'root' if os.getuid() == 0 else 'emacs'
+        self.publish_account_records(
+            f'other:x:{os.getuid() + 1}:{os.getgid()}:other:/other:/bin/false\n'
+            f'{name}:x:{os.getuid()}:{os.getgid()}:editor:/configured-home:/bin/false\n')
+        result = self.run_code('''
+import grp, json, os, pwd
+account = pwd.getpwuid(os.getuid())
+print(json.dumps([account.pw_name, grp.getgrgid(os.getgid()).gr_name,
+    os.getuid(), os.getgid(), account.pw_dir, account.pw_shell,
+    os.environ['USER'], os.environ['LOGNAME']]))
+''', env=dict(os.environ, USER='inherited-name', LOGNAME='inherited-login',
+              HOME='/tmp/caller-home', SHELL='/bin/sh'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [name, name, os.getuid(), os.getgid(),
+            '/tmp/caller-home', '/bin/sh', name, name])
+
+    def test_unregistered_uid_keeps_inherited_name(self):
+        self.publish_account_records(
+            f'other:x:{os.getuid() + 1}:{os.getgid()}:other:/other:/bin/false\n')
+        result = self.run_code('''
+import json, os, pwd
+print(json.dumps([pwd.getpwuid(os.getuid()).pw_name,
+    os.environ['USER'], os.environ['LOGNAME']]))
+''', env=dict(os.environ, USER='inherited-name', LOGNAME='inherited-login'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [
+            'root' if os.getuid() == 0 else 'inherited-name', 'inherited-name', 'inherited-login'])
+
+    def test_registered_group_does_not_change_actual_gid(self):
+        self.publish_account_records(
+            f'editor:x:{os.getuid()}:{os.getgid() + 1}:editor:/other:/bin/false\n')
+        result = self.run_code('''
+import grp, json, os
+print(json.dumps([os.getgid(), grp.getgrgid(os.getgid()).gr_name]))
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [os.getgid(),
+            'root' if os.getgid() == 0 else f'gid{os.getgid()}'])
+
     def test_explicit_etc_keeps_supplied_account_records(self):
+        self.publish_account_records(
+            f'configured:x:{os.getuid()}:{os.getgid()}:ignored:/ignored:/bin/false\n')
         directory = self.base / 'etc'
         directory.mkdir()
         record = f'explicit-user:x:{os.getuid()}:{os.getgid()}:explicit:/explicit-home:/bin/sh\n'

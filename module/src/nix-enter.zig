@@ -110,7 +110,36 @@ fn mountPrivateVar(init: std.process.Init, root: []const u8) !void {
     }
 }
 
-fn mountCallerEtc(init: std.process.Init, root: []const u8, uid: u32, gid: u32) !void {
+fn registeredAccount(init: std.process.Init, uid: u32) !?struct { name: []const u8, gid: u32 } {
+    const opened = linux.openat(-100, "/nix/var/nix/profiles/system-profile/etc/nns/passwd", .{ .ACCMODE = .RDONLY }, 0);
+    if (@as(isize, @bitCast(opened)) == -2) return null; // Bootstrap without an infrastructure profile.
+    const fd: i32 = @intCast(checked(opened, "open registered accounts"));
+    defer _ = linux.close(fd);
+    var contents = std.ArrayList(u8).empty;
+    defer contents.deinit(init.gpa);
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const count = checked(linux.read(fd, &buffer, buffer.len), "read registered accounts");
+        if (count == 0) break;
+        try contents.appendSlice(init.gpa, buffer[0..count]);
+    }
+    var lines = std.mem.splitScalar(u8, contents.items, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var fields = std.mem.splitScalar(u8, line, ':');
+        const name = fields.next().?;
+        _ = fields.next() orelse return error.InvalidAccountRegistry;
+        const account_uid = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidAccountRegistry, 10) catch return error.InvalidAccountRegistry;
+        const account_gid = std.fmt.parseInt(u32, fields.next() orelse return error.InvalidAccountRegistry, 10) catch return error.InvalidAccountRegistry;
+        if (account_uid != uid) continue;
+        if (name.len == 0 or !std.ascii.isAlphanumeric(name[0])) return error.InvalidAccountRegistry;
+        for (name) |c| if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_') return error.InvalidAccountRegistry;
+        return .{ .name = try init.gpa.dupe(u8, name), .gid = account_gid };
+    }
+    return null;
+}
+
+fn mountCallerEtc(init: std.process.Init, root: []const u8) !void {
     const previous_umask = checked(linux.syscall1(.umask, 0), "set namespace umask");
     defer _ = linux.syscall1(.umask, previous_umask);
     var etc_buf: [4096]u8 = undefined;
@@ -137,10 +166,17 @@ fn mountCallerEtc(init: std.process.Init, root: []const u8, uid: u32, gid: u32) 
             }
         }
     }
+}
+
+fn writeCallerAccounts(init: std.process.Init, uid: u32, gid: u32) !?[]const u8 {
+    const previous_umask = checked(linux.syscall1(.umask, 0), "set account file umask");
+    defer _ = linux.syscall1(.umask, previous_umask);
+    const registered = try registeredAccount(init, uid);
     const inherited_name = init.environ_map.get("USER") orelse "";
-    const name = if (uid == 0) "root" else if (inherited_name.len != 0) inherited_name else
+    const name = if (uid == 0) "root" else if (registered) |account| account.name else if (inherited_name.len != 0) inherited_name else
         try std.fmt.allocPrint(init.gpa, "uid{d}", .{uid});
-    const group = if (gid == 0) "root" else try std.fmt.allocPrint(init.gpa, "gid{d}", .{gid});
+    const group = if (gid == 0) "root" else if (registered != null and registered.?.gid == gid) name else
+        try std.fmt.allocPrint(init.gpa, "gid{d}", .{gid});
     const home = init.environ_map.get("HOME") orelse "/";
     const inherited_shell = init.environ_map.get("SHELL") orelse "";
     const shell = if (inherited_shell.len == 0) "/bin/sh" else inherited_shell;
@@ -153,11 +189,13 @@ fn mountCallerEtc(init: std.process.Init, root: []const u8, uid: u32, gid: u32) 
         .{ .name = "passwd", .contents = passwd },
         .{ .name = "group", .contents = groups },
     }) |file| {
-        const destination = path(&destination_buf, etc_root, file.name);
+        var destination_buf: [4096]u8 = undefined;
+        const destination = path(&destination_buf, "/etc", file.name);
         const fd: i32 = @intCast(checked(linux.openat(-100, destination.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644), "create caller account file"));
         defer _ = linux.close(fd);
         if (checked(linux.write(fd, file.contents.ptr, file.contents.len), "write caller account file") != file.contents.len) return error.ShortAccountWrite;
     }
+    return if (registered != null) name else null;
 }
 
 fn profilePath(init: std.process.Init, profile: []const u8, generation: ?[]const u8) [:0]u8 {
@@ -233,10 +271,14 @@ fn replaceEnv(init: std.process.Init, env: *[*:null]const ?[*:0]const u8, name: 
     env.* = entries.ptr;
 }
 
-fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u8, profile_arg: ?[]const u8, generation: ?[]const u8) noreturn {
+fn exec(init: std.process.Init, args: []const [*:0]const u8, store: [*:0]const u8, profile_arg: ?[]const u8, generation: ?[]const u8, account_name: ?[]const u8) noreturn {
     const argv = init.gpa.allocSentinel(?[*:0]const u8, args.len, null) catch @panic("out of memory");
     for (args, 0..) |arg, i| argv[i] = arg;
     var env: [*:null]const ?[*:0]const u8 = @ptrCast(init.minimal.environ.block.view().slice.ptr);
+    if (account_name) |name| {
+        replaceEnv(init, &env, "USER", name);
+        replaceEnv(init, &env, "LOGNAME", name);
+    }
     // Bionic's linker namespace permits /data, not /nix. Use the physical
     // backing path; the libc-neutral bridge passes Bionic calls through.
     var bridge_buf: [4096]u8 = undefined;
@@ -411,7 +453,7 @@ pub fn main(init: std.process.Init) !u8 {
         _ = checked(linux.mkdirat(-100, dest.ptr, 0o755), "mkdir etc in new root");
         mount("bind etc", etcdir, dest.ptr, null, linux.MS.BIND, 0);
     } else {
-        try mountCallerEtc(init, root, uid, gid);
+        try mountCallerEtc(init, root);
     }
     var original = try std.Io.Dir.openDirAbsolute(init.io, "/", .{ .iterate = true });
     var entries = original.iterate();
@@ -447,6 +489,7 @@ pub fn main(init: std.process.Init) !u8 {
         _ = linux.close(@intCast(nscd));
         mount("hide host NSS cache", "/var/empty", "/var/run/nscd", null, linux.MS.BIND, 0);
     }
+    const account_name = if (etcdir[0] == 0) try writeCallerAccounts(init, uid, gid) else null;
     _ = checked(linux.chdir(@ptrCast(&cwd)), "restore working directory");
-    exec(init, args[i..], store, if (profile_set) profile else null, generation);
+    exec(init, args[i..], store, if (profile_set) profile else null, generation, account_name);
 }

@@ -7,6 +7,14 @@
 let
   inherit (lib) mkOption types;
   cfg = config;
+  nixTrustedGroupGid = 30000;
+  accountRecords = lib.concatStringsSep "\n" (
+    lib.mapAttrsToList (
+      name: account:
+      "${name}:x:${builtins.toString account.uid}:${builtins.toString account.gid}:${name}:${account.home}:${account.shell}"
+    ) cfg.accounts
+  );
+  callerAccounts = pkgs.writeTextDir "etc/nns/passwd" (accountRecords + "\n");
   reservedVariables = [
     "HOME"
     "USER"
@@ -50,6 +58,7 @@ let
     phonePkgs = pkgs;
     nixPackage = cfg.nix.package;
     extraPaths = [
+      callerAccounts
       pkgs.util-linux
       pkgs.openssh
       pkgs.cacert
@@ -190,17 +199,17 @@ let
   etc = pkgs.runCommand "nns-system-etc" { } ''
     mkdir -p "$out/nix" "$out/ssl/certs"
     cat > "$out/passwd" <<'EOF'
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (
-        name: account:
-        "${name}:x:${toString account.uid}:${toString account.gid}:${name}:${account.home}:${account.shell}"
-      ) cfg.accounts
-    )}
+    ${accountRecords}
     EOF
     cat > "$out/group" <<'EOF'
     ${lib.concatStringsSep "\n" (
       lib.mapAttrsToList (name: account: "${name}:x:${toString account.gid}:${name}") cfg.accounts
     )}
+    nix-trusted:x:${builtins.toString nixTrustedGroupGid}:${
+      lib.concatStringsSep "," (
+        builtins.attrNames (lib.filterAttrs (_: account: account.nixTrusted) cfg.accounts)
+      )
+    }
     EOF
     cat > "$out/nix/nix.conf" <<'EOF'
     ${lib.concatStringsSep "\n" (
@@ -358,12 +367,22 @@ in
     };
     accounts = mkOption {
       default = { };
+      description = "Daemon-side Unix account records for existing UIDs, not Android account creation.";
       type = types.attrsOf (
         types.submodule (
           { ... }: {
             options = {
               uid = mkOption { type = types.ints.between 0 4294967294; };
               gid = mkOption { type = types.ints.between 0 4294967294; };
+              nixTrusted = mkOption {
+                type = types.bool;
+                default = false;
+                description = ''
+                  Grant Nix daemon administration privileges through the virtual
+                  nix-trusted group. This does not control store-read access.
+                  UID 0 remains trusted independently of this flag.
+                '';
+              };
               home = mkOption { type = types.str; };
               shell = mkOption {
                 type = types.str;
@@ -391,7 +410,10 @@ in
         "nix-command"
         "flakes"
       ];
-      trusted-users = [ "root" ];
+      trusted-users = [
+        "root"
+        "@nix-trusted"
+      ];
       ssl-cert-file = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     };
     accounts.root = {
@@ -441,6 +463,8 @@ in
       ++ lib.mapAttrsToList (name: account: {
         assertion =
           validName name
+          && name != "nix-trusted"
+          && account.gid != nixTrustedGroupGid
           && (name == "root" || account.uid != 0)
           && builtins.all (value: !(lib.hasInfix "\n" value) && !(lib.hasInfix ":" value)) [
             account.home

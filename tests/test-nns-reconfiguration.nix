@@ -27,6 +27,25 @@ let
     }
   ];
   profileChanged = evaluate [ { environment.profiles.development.variables.EDITOR = "editor"; } ];
+  accountModule = {
+    accounts = {
+      editor = {
+        uid = 1001;
+        gid = 1001;
+        home = "/home/editor";
+      };
+      reader = {
+        uid = 1002;
+        gid = 1002;
+        home = "/home/reader";
+      };
+    };
+  };
+  untrusted = evaluate [ accountModule ];
+  trusted = evaluate [
+    accountModule
+    { accounts.editor.nixTrusted = true; }
+  ];
 in
 pkgs.runCommand "check-nns-reconfiguration" { } ''
   test "$(readlink -f ${original}/services/nix-daemon/run)" != \
@@ -37,5 +56,14 @@ pkgs.runCommand "check-nns-reconfiguration" { } ''
     test "$(readlink -f ${original}/services/$service/run)" = \
       "$(readlink -f ${profileChanged}/services/$service/run)"
   done
+  cmp ${trusted}/system-profile/etc/nns/passwd ${trusted}/etc/passwd
+  cmp ${untrusted}/system-profile/etc/nns/passwd ${untrusted}/etc/passwd
+  grep -Fx 'trusted-users = root @nix-trusted' ${trusted}/etc/nix/nix.conf
+  grep -Fx 'nix-trusted:x:30000:editor' ${trusted}/etc/group
+  grep -Fx 'nix-trusted:x:30000:' ${untrusted}/etc/group
+  test "$(readlink -f ${trusted}/services/nix-daemon/run)" != \
+    "$(readlink -f ${untrusted}/services/nix-daemon/run)"
+  test "$(readlink -f ${trusted}/services/sshd/run)" = \
+    "$(readlink -f ${untrusted}/services/sshd/run)"
   touch "$out"
 ''

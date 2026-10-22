@@ -43,7 +43,7 @@ timeout, and ordered NNS/NoD rollback passed on the phone. The tests restored
 the working deployment and its shared configuration.
 
 See [NNS systems and package profiles](docs/nns-systems.md) for ownership,
-NoD consumer mode, Emacs profile selection, and retention. Build isolation
+NoD integration, Emacs profile selection, and retention. Build isolation
 remains deferred, see [the research notes](docs/build-isolation.md).
 
 ## Cheetah boot/unlock regression
@@ -60,7 +60,7 @@ phone and is not part of `nix flake check`.
 
 After installing or clearing native Android Emacs, unlock and open it once so
 Android creates its app-private files, then close it. With ADB connected,
-NoD's SSH/socket services running, the desktop Emacs configuration, and
+NNS SSH and Emacs socket services running, the desktop Emacs configuration, and
 Maple Mono NF CN Regular installed on the host, run:
 
 ```sh
@@ -69,7 +69,7 @@ Maple Mono NF CN Regular installed on the host, run:
 
 The command restores the GUI configuration, font, and straight.el repositories
 (if absent), preserves an existing app SSH key or creates one after a wipe,
-updates NoD's restricted authorized key, and pins its current SSH host key.
+updates NoD's restricted authorized key, and pins the NNS SSH host key.
 It refuses a changed pinned host key rather than silently trusting it. It
 refreshes the existing `emacs-socket` service, starts Android Emacs, and waits
 for its server. Set `ANDROID_SERIAL` to select a different ADB device.

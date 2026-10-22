@@ -72,15 +72,16 @@ The launcher supplies a fresh `/var/empty` in its private tmpfs root. It preserv
 
 The boot module selects `/nix/var/nix/profiles/nns-system`. It checks root ownership of the administrative paths and selected store directory. If selected, it does not run legacy `stage-etc.sh`, daemon startup, or app-derived service startup. If no generation is selected, legacy boot remains available with a warning.
 
-## NoD consumer mode
+## NoD integration
 
 ```nix
 imports = [ inputs.nns.nixOnDroidModules.nns ];
 nns.enable = true;
-nns.systemManaged = true;
 ```
 
-Remove the legacy `nns-sshd` import and move `nns.services` and `nns.nix.settings` into the NNS host. Consumer mode rejects daemon configuration and enabled root service materialization.
+The NoD module always consumes an independent NNS system. It has no daemon settings or root-service options. Declare those in the NNS host with `nix.settings`, `services.openssh`, and `services.runit`. Activate NNS before NoD so the daemon and delegated profile directory exist.
+
+The NNS daemon owns cache URLs and trusted public keys. Do not repeat those settings in NoD's per-user `nix.conf`. Overrides for restricted settings or unapproved caches cause warnings without granting the app trust.
 
 NoD activation reports the selected client version and the running daemon version. A successful daemon connection is required. Different versions produce a warning, not an activation failure. A successful connection does not guarantee that every feature is available.
 

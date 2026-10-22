@@ -1,78 +1,22 @@
-# Nix-on-Droid module: run NoD sessions through the NNS launcher instead of
-# proot.
+# Nix-on-Droid consumer of an independent NNS system generation.
+# Sessions use the NNS launcher instead of proot, retain the app identity,
+# and send store operations to the root-owned Nix daemon.
 #
-# Sessions exec `/data/nix/bin/nix-enter`, which builds a private user+mount
-# namespace with the canonical root-owned store at `/nix` and hands off to the
-# NoD session shell. Store and profile writes go through the root daemon
-# (`NIX_REMOTE=daemon`). This replaces proot entirely: no link2symlink, no
-# fake `/proc`, no static proot roulette.
+# Activation manages the app prefix, login, packages, terminal files, and
+# Home Manager. The NoD generation profile lives in its delegated per-user
+# directory. Root services and shared daemon configuration belong to NNS.
 #
-# The proot-specific activation steps are overridden to write into
-# `build.installationDir` (the app prefix) directly instead of proot-mapped
-# `/bin`, `/usr`, `/etc`. The NoD generation profile
-# uses its delegated per-user directory when nns.systemManaged is enabled.
-# Session packages remain in the app-owned `$HOME/.nix-profile`. Legacy
-# configurations retain the original global generation profile.
-#
-# Usage (inside a Nix-on-Droid configuration):
-#
-#   imports = [ (import "/data/nix/etc/nix-on-droid-module.nix") ];
-#
-# First activation must be run manually through the launcher, e.g.:
-#
-#   nix-enter -- nix build --impure --no-link \
-#     <flake>#nixOnDroidConfigurations.<device>.activationPackage
-#   nix-enter -- /nix/store/<gen>-nix-on-droid-generation/activate
+# Import inputs.nns.nixOnDroidModules.nns and set nns.enable = true.
+# Activate the standalone NNS generation before activating NoD.
 
 { config, lib, options, pkgs, ... }:
 
 let
-  inherit (lib) attrNames attrValues concatMapStringsSep map mkDefault mkEnableOption mkForce mkIf mkOption optional toString types;
+  inherit (lib) map mkEnableOption mkForce mkIf mkOption types;
   cfg = config.nns;
 
   installDir = config.build.installationDir;
   generationProfile = "/nix/var/nix/profiles/per-user/${config.user.userName}/nix-on-droid";
-
-  portableServices = import "${pkgs.path}/lib/services/lib.nix" { inherit lib; };
-  # The pinned portable base lacks process.environment; newer revisions may
-  # already declare it, so test the base before adding the compatibility option.
-  portableHasEnvironment = (lib.evalModules {
-    class = "service";
-    modules = [ (import "${pkgs.path}/lib/services/service.nix" { inherit pkgs; }) ];
-  }).options.process ? environment;
-  serviceSubmodule = (portableServices.configure {
-    serviceManagerPkgs = pkgs;
-    extraRootModules = [
-      ({ name, ... }: {
-        options.process = lib.optionalAttrs (!portableHasEnvironment) {
-          environment = mkOption {
-            type = types.lazyAttrsOf (types.nullOr (
-              types.coercedTo (types.either types.path types.package) (value: "${value}") types.str
-            ));
-            default = { };
-            description = "Environment variables for the service process; null unsets a variable.";
-          };
-        };
-        options.nns = {
-          enable = mkOption {
-            type = types.bool;
-            default = true;
-            description = "Whether the ${name} service is supervised.";
-          };
-          startAt = mkOption {
-            type = types.enum [ "boot" "unlock" ];
-            default = "boot";
-            description = "Wait for first unlock before starting this service when set to unlock.";
-          };
-          after = mkOption {
-            type = types.listOf types.str;
-            default = [ ];
-            description = "Wait for these runit services to be running before starting.";
-          };
-        };
-      })
-    ];
-  }).serviceSubmodule;
 
   # su/sudo/rish ship via the module (nix/rish.nix) into
   # /data/nix/var/nns/bin and work in any nix-enter session; nothing is
@@ -234,13 +178,8 @@ let
     }}"
     else "";
 
-  # One handler pair per managed ~/.termux file. The terminal UI resolves
-  # these outside the launcher namespace and termux's loaders only accept
-  # regular files (symlinks are ignored), so the source is copied into
-  # app-owned storage under nns-<name> and reached through a local symlink
-  # - the same shape for font, colors and properties. `option` names the
-  # activation keys (linkFont/unlinkFont, ...); a null source selects the
-  # unlink side.
+  # The terminal UI resolves these outside the namespace and ignores store
+  # symlinks. Copy each file into app storage and link to that local copy.
   managedTermuxFile = { option, name, source }:
     let
       dir = "${config.user.home}/.termux";
@@ -274,132 +213,13 @@ let
         fi
       '';
     };
-
-  # ---- nns.services: declarative runit services supervised at boot ----
-
-  # State lives in DE space: service dirs are materialized by activation
-  # (app uid), readiness markers are boot-reset, runsvdir is started by the
-  # KSU service stage inside a launcher namespace (so run scripts see /nix).
-  servicesRoot = "/data/nix/var/nns";
-  servicesDir = "${servicesRoot}/services";
-  readyDir = "${servicesRoot}/ready";
-
-  # The single wait implementation; service run scripts get one line each.
-  waitBin = pkgs.writeScript "nns-wait" /* bash */ ''
-    #!/system/bin/sh
-    # usage: nns-wait marker <name>  - block until ready/<name> exists
-    #        nns-wait up <dir>       - block until runsv reports <dir> running
-    case "$1" in
-      marker)
-        until [ -e "${readyDir}/$2" ]; do sleep 1; done
-        ;;
-      up)
-        until sv status "$2" 2>/dev/null | grep -q '^run:'; do sleep 1; done
-        ;;
-      *)
-        echo "usage: nns-wait marker <name> | nns-wait up <service-dir>" >&2
-        exit 2
-        ;;
-    esac
-  '';
-
-  # The supervised-process environment contract: this header opens every
-  # generated run script. PATH comes from nns.services.sessionPath, the
-  # option that service feature modules share (services/sshd.nix writes it
-  # into ~/.ssh/environment).
-  servicePreamble =
-    path: /* bash */ ''
-      #!/system/bin/sh
-      # Generated by NNS (nns.services); DO NOT EDIT.
-      export HOME=/data/nix/home
-      export TMPDIR=/data/nix/tmp
-      export NIX_CONF_DIR=/data/nix/etc/nix
-      export PATH=${path}
-    '';
-
-  # nns.startAt = "unlock" gates on the provider's marker; nns.after waits until
-  # runsv reports the named services up. The polling loop itself lives only
-  # in waitBin (marker mode) and the nns-unlock-ready provider.
-  renderWaits =
-    svc:
-    concatMapStringsSep "\n" (w: "${waitBin} ${w}") (
-      optional (svc.nns.startAt == "unlock") "marker unlock"
-      ++ map (d: "up ${lib.escapeShellArg "${servicesDir}/${d}"}") svc.nns.after
-    );
-
-  mkRunScript =
-    name: preamble: svc:
-    let
-      waits = renderWaits svc;
-      exports = lib.concatStringsSep "\n" (lib.mapAttrsToList (key: value:
-        if value == null then "unset ${key}"
-        else "export ${key}=${lib.escapeShellArg value}"
-      ) svc.process.environment);
-    in
-    pkgs.writeScript "nns-run-${name}" (
-      preamble
-      + waits + lib.optionalString (waits != "") "\n"
-      + exports + lib.optionalString (exports != "") "\n"
-      + "exec ${lib.escapeShellArgs svc.process.argv}\n"
-    );
-
-  # Readiness provider for startAt = "unlock": the one and only process that
-  # polls for CE; every gated service blocks on the marker it drops, then it
-  # parks (stays "up" so runsv does not restart it into a poll loop).
-  unlockReadyRun = pkgs.writeScript "nns-run-nns-unlock-ready" /* bash */ ''
-    #!/system/bin/sh
-    # Generated by NNS (nns.services); DO NOT EDIT.
-    until [ "$(/system/bin/getprop sys.user.0.ce_available)" = "true" ]; do
-      sleep 5
-    done
-    mkdir -p ${readyDir}
-    touch ${readyDir}/unlock
-    exec /system/bin/sleep 2147483647
-  '';
-
-  # nns.nix.settings rendered as a marker-delimited block; the updater
-  # replaces the previous block in the staged config atomically enough for
-  # a root-owned file (delete markers, append). post-fs-data preserves the
-  # block when it re-syncs the module template at boot.
-  nixSettingsFragment = pkgs.writeText "nns-nix-settings.conf" ''
-    # >>> nns.nix.settings (managed by activation; post-fs-data preserves this block)
-    ${lib.concatStringsSep "\n" (lib.mapAttrsToList
-      (name: value:
-        let
-          rendered =
-            if lib.isBool value then (if value then "true" else "false")
-            else if lib.isList value then lib.concatStringsSep " " (map toString value)
-            else toString value;
-        in
-        "${name} = ${rendered}")
-      cfg.nix.settings)}
-    # <<< nns.nix.settings
-  '';
-  nixSettingsUpdater = pkgs.writeText "nns-nix-settings-update.sh" /* sh */ ''
-    #!/system/bin/sh
-    set -eu
-    CONF=/data/nix/etc/nix/nix.conf
-    FRAG="$1"
-    if [ ! -f "$CONF" ]; then
-      echo "nns: $CONF missing - deploy the NNS module first" >&2
-      exit 1
-    fi
-    sed -i '/^# >>> nns.nix.settings/,/^# <<< nns.nix.settings/d' "$CONF"
-    cat "$FRAG" >> "$CONF"
-  '';
-
 in
-
 {
-
-  ###### interface
-
   options = {
-    # Patch the completed package list, not config.environment.packages from
-    # inside one of its own elements. Upstream's CLI hardcodes the old path.
+    # Patch the completed package list, not one of its own elements.
     environment.packages = mkOption {
       type = types.listOf types.package;
-      apply = packages: if !(cfg.enable && cfg.systemManaged) then packages else
+      apply = packages: if !cfg.enable then packages else
         map (package:
           if lib.isDerivation package && (package.pname or (package.name or "")) == "nix-on-droid"
           then package.overrideAttrs (previous: {
@@ -414,92 +234,13 @@ in
 
     nns = {
       enable = mkEnableOption ''
-        NNS launcher-based sessions. Replaces proot: sessions run in private
-        user+mount namespaces over the root-owned NNS store, and all store and
-        profile writes go through the root nix daemon.
+        NNS launcher-based sessions backed by an independent NNS system.
+        NoD manages only its app environment, not root services or daemon configuration.
       '';
-
-      systemManaged = mkEnableOption ''
-        consume an independent NNS system generation. NoD activation cannot
-        configure the daemon or materialize root services in this mode.
-      '';
-
       launcher = mkOption {
         type = types.str;
         default = "/data/nix/bin/nix-enter";
-        description = ''
-          Path to the static NNS launcher, visible to the app on the host
-          filesystem (outside the store namespace).
-        '';
-      };
-
-      nix.settings = mkOption {
-        type = types.attrsOf (types.oneOf [
-          types.str
-          (types.listOf types.str)
-          types.bool
-          types.int
-        ]);
-        default = { };
-        description = ''
-          System-wide nix.conf settings, synced into the shared staged
-          config (/data/nix/etc/nix/nix.conf) on activation. Every
-          consumer of the store sees them: root and app sessions, ssh,
-          and any terminal app. Applies to new nix processes
-          immediately; the daemon picks it up at its next restart.
-        '';
-      };
-
-      services = {
-        enable = mkEnableOption ''
-          declarative nns services: runsvdir (runit) is started from the KSU
-          service stage inside a launcher namespace and supervises service
-          directories that activation materializes into
-          /data/nix/var/nns/services (DE space, so they exist before first
-          unlock). The supervisor starts at boot; new or changed services
-          take effect on the next boot (or the next manual run of the
-          module's service.sh).
-        '';
-
-        runit = mkOption {
-          default = { };
-          type = types.attrsOf serviceSubmodule;
-          description = ''
-            Raw modular services supervised by runit: users and shipped
-            feature modules contribute entries into the same namespace
-            (NixOS's `systemd.services` pattern). Use `imports` to reuse
-            nixpkgs service modules and `process.argv` and
-            `process.environment` to configure the process. `nns.startAt`
-            and `nns.after` control NNS-specific boot ordering. `nns.enable`
-            disables a service. Systemd units, nested services, reload commands
-            and configData are not supported.
-          '';
-        };
-
-        # The session PATH contract: the wrapper directory first (su/sudo/
-        # rish must beat busybox's setuid-less su), then the system profile,
-        # the app profile and Android's own paths. Shared by the generated
-        # run scripts and the service feature modules (services/ in the NNS
-        # flake, e.g. sshd's ~/.ssh/environment).
-        sessionPath = mkOption {
-          type = types.str;
-          description = ''
-            PATH for supervised service run scripts and ssh sessions.
-          '';
-        };
-
-        # Bash fragments spliced into the materializeServices activation
-        # step. Service feature modules contribute their config and state
-        # materialization here; entries run as the activation uid and should
-        # use the DRY_RUN_CMD convention. Requires nns.services.enable to
-        # have any effect.
-        extraActivation = mkOption {
-          type = types.attrsOf types.lines;
-          default = { };
-          description = ''
-            Additional service materialization performed during activation.
-          '';
-        };
+        description = "Path to the static NNS launcher outside the store namespace.";
       };
     };
 
@@ -518,86 +259,27 @@ in
         format has no other types.
       '';
     };
-
   };
 
   config = mkIf cfg.enable {
-
-    nns.services.sessionPath = mkDefault
-      "/data/nix/var/nns/bin:/nix/var/nix/profiles/system-profile/bin:${config.user.home}/.nix-profile/bin:/system/bin:/system/xbin";
-
-    assertions = [{
-      assertion = !cfg.systemManaged || (!cfg.services.enable && cfg.nix.settings == { });
-      message = "System-managed NoD is a consumer: move nns.services and nns.nix.settings into the NNS host configuration";
-    }] ++ lib.concatLists (lib.mapAttrsToList (name: service:
-      portableServices.getAssertions [ "nns" "services" "runit" name ] service ++ [
-        {
-          assertion = builtins.match "[A-Za-z0-9_-]+" name != null
-            && name != "nns-unlock-ready";
-          message = "nns.services.services.${name}: invalid or reserved runit service name";
-        }
-        {
-          assertion = lib.all (key: builtins.match "[A-Za-z_][A-Za-z0-9_]*" key != null)
-            (attrNames service.process.environment);
-          message = "nns.services.services.${name}: invalid environment variable name";
-        }
-        {
-          assertion = service.nns.enable -> service.process.argv != [ ];
-          message = "nns.services.services.${name}: process.argv must name an executable";
-        }
-        {
-          assertion = service.configData == { } && service.services == { }
-            && service.process.reloadCommand == null
-            && !service.notificationProtocol.systemd && !service.notificationProtocol.s6;
-          message = "nns.services.services.${name}: configData, nested services, reload and notification protocols are not supported by NNS runit";
-        }
-      ]) cfg.services.runit);
-    warnings = lib.concatLists (lib.mapAttrsToList (name: service:
-      portableServices.getWarnings [ "nns" "services" "runit" name ] service
-    ) cfg.services.runit);
-
-    # runsvdir/sv/pause for nns.services; also what nns-wait's `up` mode
-    # shells out to (rendered run scripts put the profile bin on PATH).
-    # AVF guests reach the phone's nix daemon through this bridge: the
-    # guest's plain daemon socket tunnels over vsock to `nix-daemon --stdio`,
-    # so guest nix works with NIX_REMOTE=daemon and no config changes. The
-    # launcher preamble supplies NIX_CONF_DIR and the /nix store namespace.
-    nns.services.runit.nix-bridge = mkIf cfg.services.enable {
-      process.argv = [
-        "${lib.getExe pkgs.socat}"
-        "VSOCK-LISTEN:15555,fork"
-        "SYSTEM:/nix/var/nix/profiles/system-profile/bin/nix-daemon --stdio"
-      ];
-    };
-
-    environment.packages = lib.optional cfg.services.enable pkgs.runit;
-
     environment.sessionVariables.NIX_SSL_CERT_FILE =
       "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
-    # The activation options are `types.attrs`, whose merge does not respect
-    # priorities for sub-attribute definitions — a `mkForce` on an individual
-    # key silently loses. Overrides must therefore replace the whole option
-    # value, which means replicating the steps other modules contribute
-    # (home-manager's priority fixup; upgrade's dev/shm bootstrap).
+    # These upstream activation options merge as whole attribute sets.
     build = lib.optionalAttrs (options ? build && options.build ? linkProotStatic) {
       linkProotStatic = mkForce false;
     } // {
       activationBefore = mkForce ({
-        # /bin/sh and /usr/bin/env live in the app prefix now; launcher
-        # sessions see the real Android root and the store, not a proot tree.
         linkBinSh = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/bin
           $DRY_RUN_CMD ln $VERBOSE_ARG --symbolic --force ${config.environment.binSh} ${installDir}/bin/.sh.tmp
           $DRY_RUN_CMD mv $VERBOSE_ARG ${installDir}/bin/.sh.tmp ${installDir}/bin/sh
         '';
-
         linkUsrBinEnv = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/usr/bin
           $DRY_RUN_CMD ln $VERBOSE_ARG --symbolic --force ${config.environment.usrBinEnv} ${installDir}/usr/bin/.env.tmp
           $DRY_RUN_CMD mv $VERBOSE_ARG ${installDir}/usr/bin/.env.tmp ${installDir}/usr/bin/env
         '';
-      } // lib.optionalAttrs cfg.systemManaged {
         checkNixVersions = ''
           $DRY_RUN_CMD ${pkgs.coreutils}/bin/env NIX_CONF_DIR=/data/nix/etc/nix \
             ${pkgs.runtimeShell} ${./check-nix-versions.sh} \
@@ -611,7 +293,7 @@ in
         '';
       });
 
-      activationAfter = mkIf cfg.systemManaged (mkForce ({
+      activationAfter = mkForce ({
         linkProfile = ''
           generationDir="$(dirname "$0")"
           if [[ $generationDir =~ ^${lib.escapeRegex generationProfile}-([0-9]+)-link$ ]]; then
@@ -624,7 +306,7 @@ in
         homeManager = lib.optionalString (config.home-manager.backupFileExtension != null)
           "HOME_MANAGER_BACKUP_EXT=${lib.escapeShellArg config.home-manager.backupFileExtension} "
           + "${config.home-manager.config.home.activationPackage}/activate";
-      }));
+      });
 
       activation = mkForce ({
         installLogin = /* bash */ ''
@@ -635,7 +317,6 @@ in
             $DRY_RUN_CMD mv $VERBOSE_ARG ${installDir}/bin/.login.tmp ${installDir}/bin/login
           fi
         '';
-
         installLoginInner = /* bash */ ''
           if (test -e ${installDir}/usr/lib/.login-inner.new && ! diff ${installDir}/usr/lib/.login-inner.new ${loginInner} > /dev/null) || \
               (! test -e ${installDir}/usr/lib/.login-inner.new && ! diff ${installDir}/usr/lib/login-inner ${loginInner} > /dev/null); then
@@ -645,30 +326,12 @@ in
             $DRY_RUN_CMD mv $VERBOSE_ARG ${installDir}/usr/lib/.login-inner.tmp ${installDir}/usr/lib/.login-inner.new
           fi
         '';
-
-        # Sessions do not use proot; nothing to install.
         installProotStatic = "";
-
-        # Sync nns.nix.settings into the shared staged nix.conf. The staged
-        # file is root-owned, so this goes through the session's own su
-        # wrapper; a dead shizuku server only delays the settings to the
-        # next boot (post-fs-data preserves the block either way).
-        syncNixSettings = if cfg.systemManaged then "" else /* bash */ ''
-          if ! $DRY_RUN_CMD su -c "sh ${nixSettingsUpdater} ${nixSettingsFragment}"; then
-            echo "nns: could not sync nix.settings (shizuku down?) -" \
-                 "they apply at the next boot instead" >&2
-          fi
-        '';
-
         setUpEtc = /* bash */ ''
           $DRY_RUN_CMD bash ${etcScript} \
             ${builtins.toString config.environment.etcBackupExtension}
         '';
-
         installPackages = installPackagesStep;
-
-        # From NoD's upgrade.nix (stateVersion < 21.11 bootstrap);
-        # harmless when unnecessary.
         createDevShm = /* bash */ ''
           $DRY_RUN_CMD mkdir $VERBOSE_ARG --parents ${installDir}/dev/shm
         '';
@@ -684,43 +347,7 @@ in
         option = "Properties";
         name = "termux.properties";
         source = if config.terminal.properties != { } then propertiesPath else null;
-      } // lib.optionalAttrs (cfg.services.enable) {
-        # Materialize service run scripts as symlinks into the closure (dry-run
-        # friendly, atomic replaces) and render sshd's config the same way.
-        # No interaction with a live runsvdir: run scripts are read at each
-        # (re)start, and the supervisor picks the directory set up on its next
-        # start (boot, or a manual service.sh run).
-        materializeServices = /* bash */ ''
-          # runit's tools live in DE space: environment.packages installs into
-          # HOME/.nix-profile, which is credential-encrypted and invisible at
-          # boot - the supervisor and nns-wait's `sv` need these before first
-          # unlock. Copied from the closure, so the phone's own nixpkgs builds
-          # them.
-          $DRY_RUN_CMD mkdir -p ${servicesRoot}/bin
-          $DRY_RUN_CMD cp -f ${lib.pipe ["runsvdir" "runsv" "sv"] [(lib.map (lib.getExe' pkgs.runit)) lib.escapeShellArgs]} ${servicesRoot}/bin/
-          $DRY_RUN_CMD mkdir -p ${servicesDir}/nns-unlock-ready
-          $DRY_RUN_CMD ln -sfn ${unlockReadyRun} ${servicesDir}/nns-unlock-ready/run
-          ${lib.concatMapStrings (name:
-            let
-              svc = cfg.services.runit.${name};
-            in
-            lib.optionalString svc.nns.enable /* bash */ ''
-              $DRY_RUN_CMD mkdir -p ${servicesDir}/${name}
-              $DRY_RUN_CMD ln -sfn ${mkRunScript name (servicePreamble cfg.services.sessionPath) svc} ${servicesDir}/${name}/run
-            '')
-            (attrNames cfg.services.runit)}
-          ${lib.concatMapStrings (name:
-            lib.optionalString (! cfg.services.runit.${name}.nns.enable) /* bash */ ''
-              $DRY_RUN_CMD rm -rf ${servicesDir}/${name}
-            '')
-            (attrNames cfg.services.runit)}
-          # Service feature modules (services/ in the NNS flake) materialize
-          # their config and state here.
-          ${lib.concatStringsSep "\n" (attrValues cfg.services.extraActivation)}
-        '';
       });
     };
-
   };
-
 }

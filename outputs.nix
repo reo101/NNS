@@ -7,9 +7,6 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
       inputs.flake-file.flakeModules.default
       # Device specializations; the base flake depends on none of them.
       ./specialized/cheetah.nix
-      # Service features (opt-in nixOnDroid modules built on the generic
-      # nns.services machinery).
-      ./services
     ];
     # A Nix-on-Droid module (class `nixOnDroid`) that replaces proot sessions
     # with the NNS launcher; pass it into `lib.nixOnDroidConfiguration`.
@@ -197,12 +194,9 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           }).config.system.build.toplevel;
           nns-reconfiguration = import ./tests/test-nns-reconfiguration.nix { inherit pkgs; };
           nns-nix-versions = import ./tests/test-nns-nix-versions.nix { inherit pkgs; };
-          nns-modular-services =
-            assert import ./tests/test-modular-services.nix { inherit pkgs; };
-            pkgs.runCommand "check-nns-modular-services" { } "touch $out";
-          nns-sshd =
-            assert import ./tests/test-sshd.nix { inherit pkgs; };
-            pkgs.runCommand "check-nns-sshd" { } "touch $out";
+          nns-nod-consumer =
+            assert import ./tests/test-nod-consumer.nix { inherit pkgs; };
+            pkgs.runCommand "check-nns-nod-consumer" { } "touch $out";
           emacs-integration = emacs;
         };
         devShells.default = pkgs.mkShell { packages = [ pkgs.android-tools pkgs.zig ]; };

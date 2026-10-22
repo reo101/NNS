@@ -81,71 +81,45 @@ The GUI accesses NoD-private files through TRAMP over SSH to
 stays on the phone; it does not depend on LAN access. For host-side recovery
 after app-data loss, see [Android Emacs recovery](../README.md#android-emacs-recovery).
 
-## Sessions and supervised services (in progress)
+## Sessions and supervised services
 
-Proot is gone; three layers sit above the launcher:
+The standalone NNS system owns the daemon, administrative SSH, accounts,
+and root services. The boot module activates its selected generation.
+Root activation stages `/data/nix/var/daemon-etc` without replacing directory
+inodes, so existing service namespaces retain access to updated files.
+Android's own `/etc` remains unchanged.
 
-- **Nix-on-Droid module** (`nix/nix-on-droid.nix`, exported as
-  `nixOnDroidModules.nns`, wired host-side by rix101's `deploy .#cheetah`):
-  replaces NoD proot sessions with `nix-enter` user-namespace sessions and a
-  root daemon (`NIX_REMOTE=daemon`). `build.linkProotStatic = false` —
-  activation writes the app prefix directly instead of a proot tree. There is
-  no `/android` alias: the old `dnshackresolver` needed proot's `-b /:/android`
-  mapping, but NNS's Bionic DNS helper requests `/system/bin/linker64` from
-  the real Android root. Only the NNS bridge should be preloaded in sessions.
-- **Staged `/etc`**: `stage-etc.sh` materializes `/data/nix/var/daemon-etc`,
-  the bind-pinned `/etc` seen by daemon and runsvdir sessions. It re-stages
-  in place (directory inodes must not move), resolving passwd/group from
-  credential-encrypted storage when available, else a pre-unlock seed — so
-  sessions spawned before first unlock run the seed shell until a post-unlock
-  re-stage. Extra `name:uid:gid` lines in `/data/nix/etc/nss-trusted` become
-  passwd/group entries plus `nix-trusted` membership (seeded for sshd privsep).
-- **`nns.services`**: modular services backed by runit. Declare
-  `nns.services.services.<name>` with portable `process.argv` and
-  `process.environment`, or import a nixpkgs `_class = "service"` module.
-  `nns.enable`, `nns.startAt` (`boot` or `unlock`), and `nns.after` are
-  backend-only options; portable modules can guard them with `options ? nns`.
-  Shell `script`/`env` definitions are no longer supported. For example:
+Declare services in the NNS host, not the NoD configuration:
 
-  ```nix
-  nns.services.services.example = {
-    process.argv = [ "/system/bin/sleep" "3600" ];
-    process.environment.EXAMPLE = "value with spaces";
-    nns.startAt = "unlock";
-  };
-  ```
+```nix
+services.runit.example = {
+  process.argv = [ "/system/bin/sleep" "3600" ];
+  process.environment.EXAMPLE = "value with spaces";
+  nns.startAt = "unlock";
+};
+```
 
-  The dedicated `services.sshd` still accepts
-  `enable/port/listenAddress/extraConfig` (config rendered from nix). Service
-  dirs and runit tools materialize to `/data/nix/var/nns/{services,bin}`;
-  `service.sh` starts `runsvdir` behind a pidfile+cmdline gate (recycled pids
-  distrusted); `nns.startAt = "unlock"` waits on the `nns-unlock-ready` sentinel
-  via `nns-wait`. Activation deliberately never touches the live runsv (root
-  control sockets vs app-uid activation) — services apply at boot or via a
-  manual `service.sh` run. Nested services, `configData`, reload and notification
-  protocols are rejected rather than silently ignored. Services must remain
-  in the foreground; NNS does not interpret `systemd.*` options.
+The `nns.startAt` and `nns.after` service fields control startup timing and
+dependencies. Activation reconciles the root-owned runit directories and
+restarts changed services. Services must stay in the foreground. Nested
+services, `configData`, reload commands, and notification protocols are not
+supported.
 
-sshd is the first service: state in credential-encrypted `/data/nix/var/sshd`
-(config, host keys, pid, logs, authorized_keys; mode 700),
-`SetEnv NIX_REMOTE=daemon` for every session, `StrictModes no` with `/data/nix`
-pinned `0:0` at boot (Android's `771 system:system` ancestry; Termux
-precedent), and patched `sshd`/`sshd-auth` copies whose `/var/empty` became
-`/data/ve` (uncreatable on this ROM), bind-mounted over the store originals
-inside the session namespace — guarded by a fatal assertion, after an earlier
-silent `dd` failure shipped unpatched helpers that only said "Missing
-privilege separation directory".
+Configure SSH through `services.openssh`. Its state lives under
+`/data/nix/var/nns`. OpenSSH runs unchanged with `StrictModes yes` and a
+private `/var/empty` supplied by the launcher. App-owned authorized-key
+files are read under the corresponding app's UID and GID.
 
-Status: end-to-end green on device (deploy confirmed, kill + boot tests
-hand-run). Shizuku's `app_process`/Binder path is now verified on-device; the
-Nix-on-Droid module installs NNS-owned `rish`/`su`/`sudo` wrappers so the stale
-upstream `service list` preflight is bypassed. Still missing: doc depth and
-broader boot-layer regression coverage. Host-initiated deployments use
-`cheetah.lan:8022` from rix101's `meta.nix`; this is separate from Emacs's
-on-phone loopback connection. Sepolicy rationale lives in the commit log
-(`jj log`), not next to `sepolicy.rule`;
-ksud's `allowxperm` rules are dropped by its sepolicy parser, so the
-terminal-ioctl workaround rides in `libnns-dns.so` — see `src/DNS.md`.
+The NoD module, exported as `nixOnDroidModules.nns`, only manages the app's
+login, package profile, private configuration, terminal files, and Home
+Manager activation. It always consumes the independent NNS system. It
+cannot declare root services or shared daemon settings. Its sessions use
+`NIX_REMOTE=daemon` and the NNS resolver bridge instead of proot or dnshack.
+The KSU module publishes the `rish`, `su`, and `sudo` helpers.
+
+See [NNS systems and package profiles](../docs/nns-systems.md) for the module
+API and deployment order. The terminal-ioctl workaround remains in
+`libnns-dns.so`, described in [DNS and terminal support](src/DNS.md).
 
 ## Seeding the store
 

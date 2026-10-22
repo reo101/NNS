@@ -1,6 +1,6 @@
 # The accepted binary caches. Consumed by the NixOS hosts (via the
 # substituters module) and rendered into the phone's shared staged
-# nix.conf (via nns.nix.settings) - one list, one source of truth.
+# nix.conf by the NNS system through nix.settings.
 [
   {
     substituter = "https://cache.nixos.org";

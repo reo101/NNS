@@ -7,14 +7,13 @@ staging_dir=$1
 emacs_home=/data/data/org.gnu.emacs/files
 config_dir=$emacs_home/.emacs.d
 nod_home=/data/data/com.termux.nix/files/home
-sshd_dir=/data/nix/var/sshd
 ssh_dir=$emacs_home/.ssh
 known_hosts=$ssh_dir/known_hosts
-host_key=$sshd_dir/ssh_host_ed25519_key.pub
+host_key=/data/nix/var/nns/ssh_host_ed25519_key.pub
 socket_dir=/data/nix/var/emacs-server
 control=/data/nix/var/nns/services/emacs-socket/supervise/control
 
-[ -f "$host_key" ] || { echo 'NoD SSH host key is missing' >&2; exit 1; }
+[ -f "$host_key" ] || { echo 'NNS SSH host key is missing' >&2; exit 1; }
 [ -p "$control" ] || { echo 'Emacs socket service is not supervised' >&2; exit 1; }
 
 emacs_uid=$(/system/bin/stat -c %u "$emacs_home")
@@ -24,7 +23,7 @@ nod_uid=$(/system/bin/stat -c %u "$nod_home")
 nod_gid=$(/system/bin/stat -c %g "$nod_home")
 nod_context=$(/system/bin/stat -c %C "$nod_home")
 
-# Trust only the key already owned by NoD's root-managed sshd.
+# Trust only the host key owned by the standalone NNS SSH service.
 read -r host_type host_public_key _ < "$host_key"
 [ "$host_type" = ssh-ed25519 ] || { echo 'Unexpected NoD SSH host key type' >&2; exit 1; }
 trusted_host="[127.0.0.1]:8022 $host_type $host_public_key"
@@ -108,10 +107,6 @@ fi
 /system/bin/chown "$nod_uid:$nod_gid" "$authorized_keys"
 /system/bin/chcon "$nod_context" "$authorized_keys"
 /system/bin/chmod 600 "$authorized_keys"
-/system/bin/cp "$authorized_keys" "$sshd_dir/authorized_keys"
-/system/bin/chown "$nod_uid:$nod_gid" "$sshd_dir/authorized_keys"
-/system/bin/chcon u:object_r:system_data_file:s0 "$sshd_dir/authorized_keys"
-/system/bin/chmod 600 "$sshd_dir/authorized_keys"
 
 # Reuse the existing unlock-gated service, including its UID and label checks.
 /system/bin/printf t > "$control"

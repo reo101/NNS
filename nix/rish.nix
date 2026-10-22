@@ -6,7 +6,7 @@
 # path is baked into the scripts, which keeps the module's
 # allowedReferences empty - the dex rides along as a plain file instead.
 #
-# Application id resolution (the app that owns the shizuku_server):
+# Fallback client application id resolution:
 #   1. NNS_APPLICATION_ID environment (per invocation)
 #   2. /data/nix/etc/app-id (staged by post-fs-data from the module arg)
 #   3. the baked @APP_ID@ default, substituted per host by module.nix
@@ -14,27 +14,12 @@
 # stages its own read-only copy (RISH_HOME or $HOME, derived from the app
 # id when unset).
 {
-  lib, pkgs, stdenvNoCC, unzip, fetchurl,
+  lib, pkgs, stdenvNoCC,
   # Baked fallback application id; module.nix substitutes the per-host one.
   appId ? "com.example.nns",
 }:
 let
-  dex = stdenvNoCC.mkDerivation {
-    name = "nns-rish-shizuku.dex";
-    src = fetchurl {
-      url = "https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/shizuku-v13.6.0.r1086.2650830c-release.apk";
-      hash = "sha256-bic6sOmRxOebyLG7ubndc5zKwahxKlQaIUB4iGt7eQ8=";
-    };
-    nativeBuildInputs = [ unzip ];
-    unpackPhase = ''
-      unzip -j "$src" "assets/rish_shizuku.dex"
-    '';
-    dontBuild = true;
-    installPhase = ''
-      cp rish_shizuku.dex "$out"
-      chmod 400 "$out"
-    '';
-  };
+  dex = pkgs.callPackage ./rish-client.nix { };
 
   rish = pkgs.writeText "nns-rish" /* sh */ ''
     #!/system/bin/sh
@@ -42,9 +27,8 @@ let
     # module to /data/nix/var/nns/bin; usable in any nix-enter session
     # without a NoD login.
 
-    # The app that owns the shizuku_server: per-invocation env, staged
-    # file, baked default. The dex copy destination follows the CALLER
-    # instead (each terminal app keeps its own read-only copy).
+    # The fallback client application id comes from the environment, staged
+    # file, or baked default. Each caller keeps its own read-only dex copy.
     APP_ID="$NNS_APPLICATION_ID"
     if [ -z "$APP_ID" ]; then
       APP_ID="$(cat /data/nix/etc/app-id 2>/dev/null)"
@@ -82,23 +66,33 @@ let
     # Restrict PATH to root-only binaries.
     export PATH="/bin:/system/bin"
 
-    # The loader reports binder failures and request timeouts itself.
-    # Preserve its exit status and streams: successful commands can be silent.
+    # SSH does not inherit Android's Java environment. The root boot service
+    # publishes the platform-derived classpaths without exposing /data/system.
+    if [ -z "$BOOTCLASSPATH" ] && [ -r /data/nix/etc/android-runtime.env ]; then
+      . /data/nix/etc/android-runtime.env
+    fi
+    if [ -z "$BOOTCLASSPATH" ]; then
+      echo 'rish: Android boot classpath is unavailable' >&2
+      exit 1
+    fi
+    export ANDROID_ROOT="''${ANDROID_ROOT:-/system}"
+    export ANDROID_DATA="''${ANDROID_DATA:-/data}"
+    export ANDROID_ART_ROOT="''${ANDROID_ART_ROOT:-/apex/com.android.art}"
+    export ANDROID_I18N_ROOT="''${ANDROID_I18N_ROOT:-/apex/com.android.i18n}"
+    export ANDROID_TZDATA_ROOT="''${ANDROID_TZDATA_ROOT:-/apex/com.android.tzdata}"
+    export CLASSPATH="$DST"
 
-    # -Xgc:SS forces ART's semispace collector: the default
-    # concurrent-copying collector creates a userfaultfd anon_inode, which
-    # the nns_app domain may not self-create (ksud drops anon_inode
-    # rules), killing app_process before its first log line.
-    APPOPTS="-Xgc:SS"
-
-    /system/bin/app_process $APPOPTS \
-      -Djava.class.path="$DST" \
-      /system/bin \
-      --nice-name=rish \
+    # app_process can exit zero before Java starts. The client acknowledges
+    # orderly shutdown in a caller-private file, without buffering its streams.
+    work=$(/system/bin/mktemp -d "$HOME_DIR/.rish/client.XXXXXXXX") || exit 1
+    trap '/system/bin/rm -rf "$work"' EXIT
+    export NNS_RISH_COMPLETION_FILE="$work/completion"
+    /system/bin/app_process /system/bin --nice-name=rish \
       rikka.shizuku.shell.ShizukuShellLoader "$@"
     rc=$?
-    if [ "$rc" -ne 0 ]; then
-      echo "rish: app_process exited $rc" >&2
+    if [ "$rc" -eq 0 ] && [ "$(/system/bin/cat "$NNS_RISH_COMPLETION_FILE" 2>/dev/null)" != complete ]; then
+      echo 'rish: command completion not verified' >&2
+      exit 1
     fi
     exit "$rc"
   '';
@@ -118,34 +112,10 @@ let
 
   rishProbe = pkgs.writeText "nns-rish-probe" /* sh */ ''
     #!/system/bin/sh
-    # One-shot diagnostic for the rish chain: stages the dex exactly like
-    # the wrapper, runs the loader raw against `-c id`, and reports the
-    # outcome. No pidof preflight: /proc is hidepid=invisible for this
-    # uid. The matching client/server log is pulled over adb afterwards.
-    APP_ID="$NNS_APPLICATION_ID"
-    if [ -z "$APP_ID" ]; then
-      APP_ID="$(cat /data/nix/etc/app-id 2>/dev/null)"
-    fi
-    if [ -z "$APP_ID" ]; then
-      APP_ID='@APP_ID@'
-    fi
-    HOME_DIR="$RISH_HOME"
-    if [ -z "$HOME_DIR" ]; then
-      HOME_DIR="$HOME"
-    fi
-    if [ -z "$HOME_DIR" ] || [ "$HOME_DIR" = "/" ]; then
-      HOME_DIR="/data/data/$APP_ID/files/home"
-    fi
-    /system/bin/mkdir -p "$HOME_DIR/.rish"
-    /system/bin/rm -f "$HOME_DIR/.rish/rish.dex"
-    /system/bin/cp /data/nix/lib/rish.dex "$HOME_DIR/.rish/rish.dex"
-    /system/bin/chmod 444 "$HOME_DIR/.rish/rish.dex"
-    echo "dex: $(/system/bin/ls -la "$HOME_DIR/.rish/rish.dex" 2>&1)"
-    RISH_APPLICATION_ID="$APP_ID" \
-      /system/bin/app_process -Xgc:SS \
-      -Djava.class.path="$HOME_DIR/.rish/rish.dex" \
-      /system/bin --nice-name=rishprobe rikka.shizuku.shell.ShizukuShellLoader -c id
-    echo "probe_rc=$? (the matching client/server log is pulled over adb after running)"
+    # Use the same loader, permission checks, and completion acknowledgement.
+    printf 'caller: '
+    /system/bin/id
+    exec /data/nix/var/nns/bin/rish -c id
   '';
 in
 stdenvNoCC.mkDerivation {

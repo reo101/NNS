@@ -200,12 +200,7 @@ allow nns_app devpts dir { getattr open read search }
 dontaudit nns_app untrusted_app_all_devpts chr_file ioctl
 # Inherited Emacs/process pipes keep the creator's SID.
 @APP_FIFO_RULES@
-# ART boots by creating a userfaultfd anon-inode; inside the launcher's
-# unprivileged user namespace the self-labeled create would be denied for
-# nns_app, killing app_process before its first log line. This statement has
-# no effect on device: ksud's sepolicy applier drops anon_inode class rules
-# (apply, check and patch all refuse them). The rish wrappers sidestep the
-# denial instead - `-Xgc:SS` keeps ART off the concurrent-copying collector
-# and its userfaultfd dependency. This rule becomes live the day ksud learns
-# the class.
+# ART can create a userfaultfd anon-inode during startup. Support for this
+# permission depends on the kernel and the policy loader. The rish client
+# uses the platform's default collector without relaxing enforcement.
 allow nns_app nns_app:anon_inode { create getattr ioctl map open read write }

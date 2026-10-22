@@ -7,10 +7,31 @@ import unittest
 
 HELPER = str(Path(sys.argv.pop(1)).resolve())
 SCRIPT = Path(__file__).resolve().parents[1] / 'module/system-generation.sh'
+RUNTIME_SCRIPT = Path(__file__).resolve().parents[1] / 'module/stage-android-runtime.sh'
 PROGRAM = r'''
 test -d /.nns-host || exit 90
 mkdir -p /data
 mount -t tmpfs -o mode=755 tmpfs /data || exit 91
+if [ "$2" = android-runtime ]; then
+  set -eu
+  mkdir -p /data/nix/etc /data/system/environ
+  printf '%s\n' 'export BOOTCLASSPATH /apex/art/core.jar:/system/framework/framework.jar' \
+    'export DEX2OATBOOTCLASSPATH /apex/art/core.jar' \
+    'export SYSTEMSERVERCLASSPATH /system/framework/services.jar' > /data/system/environ/classpath
+  "$3" "$4"
+  . /data/nix/etc/android-runtime.env
+  test "$BOOTCLASSPATH" = /apex/art/core.jar:/system/framework/framework.jar
+  test "$DEX2OATBOOTCLASSPATH" = /apex/art/core.jar
+  test -z "${SYSTEMSERVERCLASSPATH:-}"
+  cp /data/nix/etc/android-runtime.env /data/previous.env
+  printf '%s\n' 'export BOOTCLASSPATH /bad.jar;touch /data/injected' > /data/system/environ/classpath
+  if "$3" "$4"; then exit 92; fi
+  cmp /data/previous.env /data/nix/etc/android-runtime.env
+  test ! -e /data/injected
+  chmod 777 /data/nix/etc
+  if "$3" "$4"; then exit 93; fi
+  exit 0
+fi
 if [ "$2" = ssh-check ]; then
   set -eu
   umask 077
@@ -93,6 +114,13 @@ class SystemGenerationBootTest(unittest.TestCase):
         if not sshd:
             self.skipTest('OpenSSH server unavailable')
         result = self.run_case('ssh-check', str(Path(sshd).resolve()), HELPER, str(self.base))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_android_runtime_classpath_publication(self):
+        shell = shutil.which('mksh')
+        if not shell:
+            self.skipTest('mksh unavailable')
+        result = self.run_case('android-runtime', shell, str(RUNTIME_SCRIPT))
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_direct_profile_target(self):

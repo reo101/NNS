@@ -22,6 +22,7 @@ done
 find /data/nix/var/nix/profiles -maxdepth 1 -type l \
   -exec chcon -h u:object_r:system_data_file:s0 {} +
 
+/system/bin/sh /data/adb/modules/nix/stage-android-runtime.sh
 . /data/adb/modules/nix/system-generation.sh
 if nns_system_selected; then
   # The generation owns the daemon and supervisor. Never run the app-derived

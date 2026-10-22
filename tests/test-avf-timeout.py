@@ -24,6 +24,9 @@ class VirtualMachineTimeoutTest(unittest.TestCase):
         # Compile the production loops, cleanup, timeout checks, and entry point.
         # Android binder/socket setup is replaced; no device or real VM is used.
         harness = '''
+import java.io.File
+import java.lang.ref.Reference
+import java.nio.charset.StandardCharsets
 object Clock {
     private var time = 0L
     fun now() = time
@@ -44,7 +47,12 @@ class Pipe {
 object VirtualMachineClient {
 @ENTRY_POINT@
     private fun execute(arguments: Array<String>) {
-        if (arguments[0] == "framework") runFramework(arguments[1])
+        if (arguments[0] == "context") {
+            withVirtualizationManagerContext {
+                println(File(System.getenv("NNS_CONTEXT_FILE")).readText())
+                if (arguments[1] == "failure") error("controlled failure")
+            }
+        } else if (arguments[0] == "framework") runFramework(arguments[1])
         else runFilesystem(arguments[1])
     }
     private fun runFramework(mode: String) {
@@ -54,6 +62,7 @@ object VirtualMachineClient {
         val logs = Unit
 @FRAMEWORK_MONITOR@
     private fun runFilesystem(mode: String) {
+        val service = Any()
         val instance: Any = VirtualMachine(mode)
         val instanceType = VirtualMachine::class.java
         val consolePipe = arrayOf(Pipe(), Pipe())
@@ -69,6 +78,8 @@ object VirtualMachineClient {
 '''.replace('@ENTRY_POINT@', source[entry_start:entry_end]).replace(
             '@FRAMEWORK_MONITOR@', source[framework_start:framework_end]
         ).replace('@MONITOR@', source[monitor_start:monitor_end]).replace(
+            'File("/proc/thread-self/attr/exec")', 'File(System.getenv("NNS_CONTEXT_FILE"))'
+        ).replace(
             'System.currentTimeMillis()', 'Clock.now()'
         ).replace('Thread.sleep(500)', 'Clock.advance()').replace(
             'Thread.sleep(2_000)', 'Clock.advance()'
@@ -91,6 +102,22 @@ object VirtualMachineClient {
             ['java', '-jar', str(self.archive), backend, mode],
             capture_output=True, text=True, timeout=10,
         )
+
+    def test_execution_context_is_restored(self):
+        import os
+        for previous in (b'', b'previous-context'):
+            for mode in ('success', 'failure'):
+                with self.subTest(previous=previous, mode=mode):
+                    attribute = Path(self.directory.name) / 'exec-context'
+                    attribute.write_bytes(previous)
+                    result = subprocess.run(
+                        ['java', '-jar', str(self.archive), 'context', mode],
+                        env=dict(os.environ, NNS_CONTEXT_FILE=str(attribute)),
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertIn('u:r:virtualizationmanager:s0', result.stdout)
+                    self.assertEqual(result.returncode == 0, mode == 'success')
+                    self.assertEqual(attribute.read_bytes(), previous or b'\0')
 
     def test_natural_shutdown_succeeds_without_stop(self):
         for backend in ('framework', 'filesystem'):

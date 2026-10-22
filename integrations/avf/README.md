@@ -20,9 +20,19 @@ second filesystem backend. It bypasses `VirtualMachine.run`: setting
 Android's Java framework to spawn crosvm fs.
 
 The runner uses the existing root, mount-only `nix-enter` session. Neither
-ROM changes nor a global `/nix` mount are needed. The backend exits with
-the runner; the experiment stops the VM after ten minutes. Backend output
-is written to `/data/nix/var/avf/virtiofsd.log`.
+ROM changes nor a global `/nix` mount are needed. The client selects Android's
+`virtualizationmanager` execution domain while the framework starts the
+manager. This uses the existing policy for memory-lock limits and restores
+the caller's previous execution context afterward. The client retains the
+manager until VM cleanup completes.
+
+Payload files retain Android's `shell_data_file` labels from deployment
+staging. Symlinks to Nix-store image files are not compatible: the manager
+cannot receive those file descriptors under the existing policy.
+
+The backend exits with the runner. After ten minutes, the client stops the
+VM and returns failure. Backend output is written to
+`/data/nix/var/avf/virtiofsd.log`.
 
 ## Deploy and verify
 

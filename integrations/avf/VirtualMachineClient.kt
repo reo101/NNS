@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.lang.ref.Reference
 import java.nio.charset.StandardCharsets
 import org.json.JSONArray
 import org.json.JSONObject
@@ -46,6 +47,19 @@ object VirtualMachineClient {
         }
     }
 
+    private inline fun <T> withVirtualizationManagerContext(action: () -> T): T {
+        val attribute = File("/proc/thread-self/attr/exec")
+        val previous = attribute.readBytes()
+        try {
+            // KSU callers otherwise spawn virtmgr in the KSU domain. Select
+            // the existing AVF domain for this thread's next exec, not policy.
+            attribute.writeBytes("u:r:virtualizationmanager:s0\u0000".toByteArray(StandardCharsets.US_ASCII))
+            return action()
+        } finally {
+            attribute.writeBytes(if (previous.isEmpty()) byteArrayOf(0) else previous)
+        }
+    }
+
     private fun execute(arguments: Array<String>) {
         val sharedPathType = Class.forName(
             "android.system.virtualmachine.VirtualMachineCustomImageConfig\$SharedPath"
@@ -75,9 +89,10 @@ object VirtualMachineClient {
         val managerType = Class.forName(
             "android.system.virtualmachine.VirtualMachineManager"
         )
-        val manager = managerType.getConstructor(Context::class.java)
-            .newInstance(context)
-        val capabilities = managerType.getMethod("getCapabilities").invoke(manager) as Int
+        val (manager, capabilities) = withVirtualizationManagerContext {
+            val instance = managerType.getConstructor(Context::class.java).newInstance(context)
+            instance to (managerType.getMethod("getCapabilities").invoke(instance) as Int)
+        }
 
         val vmConfigType = Class.forName(
             "android.system.virtualmachine.VirtualMachineConfig"
@@ -112,7 +127,7 @@ object VirtualMachineClient {
         try {
             val getInstance = virtualizationServiceType.getDeclaredMethod("getInstance")
             getInstance.isAccessible = true
-            val service = getInstance.invoke(null)
+            val service = withVirtualizationManagerContext { getInstance.invoke(null) }
             println("VirtualizationService acquired: $service")
         } catch (serviceFailure: Throwable) {
             println("VirtualizationService acquisition FAILED:")
@@ -130,8 +145,10 @@ object VirtualMachineClient {
             println("Removing stale VM directory by hand: $vmDirectory")
             deleteTree(vmDirectory)
         }
-        val vm = managerType.getMethod("create", String::class.java, vmConfigType)
-            .invoke(manager, vmName, vmConfig)
+        val vm = withVirtualizationManagerContext {
+            managerType.getMethod("create", String::class.java, vmConfigType)
+                .invoke(manager, vmName, vmConfig)
+        }
         println(
             "VM $vmName created; capabilities=$capabilities; " +
                 "state directory=$STATE_DIRECTORY"
@@ -140,7 +157,7 @@ object VirtualMachineClient {
         val console = vm.javaClass.getMethod("getConsoleOutput").invoke(vm) as InputStream
         val logs = vm.javaClass.getMethod("getLogOutput").invoke(vm) as InputStream
 
-        vm.javaClass.getMethod("run").invoke(vm)
+        withVirtualizationManagerContext { vm.javaClass.getMethod("run").invoke(vm) }
         println("VM started; relaying console output")
 
         var sawRunning = false
@@ -206,7 +223,7 @@ object VirtualMachineClient {
         val serviceType = Class.forName("android.system.virtualmachine.VirtualizationService")
         val acquire = serviceType.getDeclaredMethod("getInstance")
         acquire.isAccessible = true
-        val service = acquire.invoke(null)
+        val service = withVirtualizationManagerContext { acquire.invoke(null) }
         val getBinder = serviceType.getDeclaredMethod("getBinder")
         getBinder.isAccessible = true
         val binder = getBinder.invoke(service)
@@ -260,6 +277,9 @@ object VirtualMachineClient {
             } finally {
                 consolePipe.forEach { it.close() }
                 logPipe.forEach { it.close() }
+                // The API caches only a weak reference. Its client FD owns
+                // virtmgr's lifetime, independently of the returned binder.
+                Reference.reachabilityFence(service)
             }
         }
         if (timedOut) throw IllegalStateException("VM timed out after 600000 ms")

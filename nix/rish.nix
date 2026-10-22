@@ -82,14 +82,8 @@ let
     # Restrict PATH to root-only binaries.
     export PATH="/bin:/system/bin"
 
-    # Shizuku registers no servicemanager name (the binder handoff goes
-    # via the REQUEST_BINDER broadcast) and /proc is hidepid=invisible
-    # for this uid, so neither `service list` nor `pidof shizuku_server`
-    # can confirm the server. Instead watch the loader's own behavior:
-    # with arguments, run it buffered and treat a silent success as the
-    # dead-server case (the loader answers the broadcast with a null
-    # binder and exits 0 without a word). Bare `rish` stays an
-    # interactive streaming session.
+    # The loader reports binder failures and request timeouts itself.
+    # Preserve its exit status and streams: successful commands can be silent.
 
     # -Xgc:SS forces ART's semispace collector: the default
     # concurrent-copying collector creates a userfaultfd anon_inode, which
@@ -97,37 +91,11 @@ let
     # rules), killing app_process before its first log line.
     APPOPTS="-Xgc:SS"
 
-    if [ "$#" -gt 0 ]; then
-      /system/bin/mkdir -p "$HOME_DIR/tmp"
-      tmp="$HOME_DIR/tmp/rish.$$"
-      /system/bin/app_process $APPOPTS \
-        -Djava.class.path="$DST" \
-        /system/bin \
-        --nice-name=rish \
-        rikka.shizuku.shell.ShizukuShellLoader \
-        "$@" >"$tmp" 2>&1
-      rc=$?
-      /system/bin/cat "$tmp"
-      silent=0
-      if [ "$rc" -eq 0 ] && [ ! -s "$tmp" ]; then
-        silent=1
-      fi
-      /system/bin/rm -f "$tmp"
-      if [ "$silent" -eq 1 ]; then
-        echo "rish: no response from the shizuku server (it may not be running, or the output transport died)" >&2
-        exit 1
-      fi
-      if [ "$rc" -ne 0 ]; then
-        echo "rish: app_process exited $rc" >&2
-      fi
-      exit "$rc"
-    fi
-
     /system/bin/app_process $APPOPTS \
       -Djava.class.path="$DST" \
       /system/bin \
       --nice-name=rish \
-      rikka.shizuku.shell.ShizukuShellLoader
+      rikka.shizuku.shell.ShizukuShellLoader "$@"
     rc=$?
     if [ "$rc" -ne 0 ]; then
       echo "rish: app_process exited $rc" >&2

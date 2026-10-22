@@ -179,6 +179,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         checks = {
           nns-dns = dns;
           nns-module = moduleX86;
+          nns-rish = import ./tests/test-rish.nix { inherit pkgs; };
           nns-system =
             assert import ./tests/test-nns-system.nix { inherit pkgs; };
             pkgs.runCommand "check-nns-system" { } "touch $out";

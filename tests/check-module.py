@@ -11,7 +11,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
     required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh', 'skip_mount',
                 'sepolicy.rule', 'bin/nix-enter', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo',
-                'bin/rish-probe', 'lib/libnns-dns.so', 'lib/rish.dex', 'etc/profile', 'etc/nix/nix.conf'}
+                'bin/rish-probe', 'bin/nns-rish-terminal', 'lib/libnns-dns.so', 'lib/rish.dex', 'etc/profile', 'etc/nix/nix.conf'}
     assert names == required, names ^ required
     assert z.testzip() is None
     assert 'id=nix\n' in z.read('module.prop').decode()
@@ -24,7 +24,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     for name in names:
         assert not Path(name).is_absolute() and '..' not in Path(name).parts
         assert z.getinfo(name).date_time == (1980, 1, 1, 0, 0, 0)
-    for name in ('bin/nix-enter', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe',
+    for name in ('bin/nix-enter', 'bin/nns-resolver', 'bin/nns-rish-terminal', 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe',
                  'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh'):
         assert (z.getinfo(name).external_attr >> 16) & stat.S_IXUSR, name
     for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh',
@@ -42,7 +42,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     entsize, count = struct.unpack_from('<HH', elf, 54)
     assert all(struct.unpack_from('<I', elf, phoff+i*entsize)[0] != 3
                for i in range(count)), 'dynamic interpreter present'
-    for name in ('bin/nns-resolver', 'lib/libnns-dns.so'):
+    for name in ('bin/nns-resolver', 'bin/nns-rish-terminal', 'lib/libnns-dns.so'):
         elf = z.read(name)
         assert elf[:6] == b'\x7fELF\x02\x01'
         assert struct.unpack_from('<H', elf, 18)[0] == machine, name

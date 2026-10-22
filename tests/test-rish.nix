@@ -2,7 +2,7 @@
 let
   scripts = pkgs.callPackage ../nix/rish.nix { };
 in
-pkgs.runCommand "check-nns-rish" { } ''
+pkgs.runCommand "check-nns-rish" { nativeBuildInputs = [ scripts.terminal.tests.native ]; } ''
   mkdir -p android/bin home
   for command in mkdir rm cp chmod cat mktemp; do
     ln -s ${pkgs.coreutils}/bin/$command android/bin/$command

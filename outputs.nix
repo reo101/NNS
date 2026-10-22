@@ -87,7 +87,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         moduleX86 = mkModule {
           launcher = hostLauncher;
           dns = dns.override { arch = "x86_64"; };
-          inherit rish;
+          rish = rish.override { arch = "x86_64"; };
           arch = "x64";
           appUid = 12345;
           appGid = 12345;

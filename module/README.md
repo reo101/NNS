@@ -117,12 +117,19 @@ cannot declare root services or shared daemon settings. Its sessions use
 `NIX_REMOTE=daemon` and the NNS resolver bridge instead of proot or dnshack.
 The KSU module publishes the `rish`, `su`, and `sudo` helpers.
 
-`rish` builds its Shizuku client from pinned source. The client retains
-Shizuku permission checks and forwards separate output streams and exit
-status. The boot module publishes Android classpaths (lists of Java library
-files) in root-owned `/data/nix/etc/android-runtime.env` for SSH sessions.
-A private completion file prevents Java startup failures from reporting
-success. No collector override or SELinux relaxation is required on cheetah.
+`rish` uses Shizuku's permission-checked process API and an NNS terminal
+supervisor written in Zig. The supervisor preserves terminal input, window
+size, output streams, and shell exit status. It stops its process group when
+the foreground shell exits. Input and window updates use a framed protocol
+(messages with explicit types and lengths). Output streams remain unmodified.
+The client does not use Shizuku's native terminal implementation or replace
+its APK.
+
+The boot module publishes the root-owned `/data/nix/bin/nns-rish-terminal`
+helper and Android classpaths (lists of Java library files) in
+`/data/nix/etc/android-runtime.env`. A private completion file prevents Java
+startup failures from reporting success. No collector override or SELinux
+relaxation is required on cheetah.
 
 See [NNS systems and package profiles](../docs/nns-systems.md) for the module
 API and deployment order. The terminal-ioctl workaround remains in

@@ -40,6 +40,21 @@ pub fn build(b: *std.Build) void {
         resolver.setLibCFile(libc_file);
         resolver.root_module.addLibraryPath(.{ .cwd_relative = libdir });
         b.installArtifact(resolver);
+        const terminal = b.addExecutable(.{
+            .name = "nns-rish-terminal",
+            .linkage = .dynamic,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("integrations/shizuku/rish-terminal.zig"),
+                .target = android,
+                .optimize = optimize,
+                .link_libc = true,
+                .strip = true,
+            }),
+        });
+        terminal.setLibCFile(libc_file);
+        terminal.root_module.addLibraryPath(.{ .cwd_relative = libdir });
+        const terminal_step = b.step("rish-terminal", "Build the Android terminal supervisor");
+        terminal_step.dependOn(&b.addInstallArtifact(terminal, .{}).step);
     } else {
         b.getInstallStep().dependOn(&b.addFail("pass -Dandroid-sysroot=/path/to/ndk/toolchains/llvm/prebuilt/<host>/sysroot").step);
     }

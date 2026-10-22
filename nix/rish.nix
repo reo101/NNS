@@ -17,9 +17,11 @@
   lib, pkgs, stdenvNoCC,
   # Baked fallback application id; module.nix substitutes the per-host one.
   appId ? "com.example.nns",
+  arch ? "aarch64",
 }:
 let
   dex = pkgs.callPackage ./rish-client.nix { };
+  terminal = pkgs.callPackage ./rish-terminal.nix { inherit arch; };
 
   rish = pkgs.writeText "nns-rish" /* sh */ ''
     #!/system/bin/sh
@@ -130,7 +132,8 @@ stdenvNoCC.mkDerivation {
     install -m 755 ${sudo} "$out/bin/sudo"
     install -m 755 ${rishProbe} "$out/bin/rish-probe"
     install -m 444 ${dex} "$out/lib/rish.dex"
+    install -m 755 ${terminal}/bin/nns-rish-terminal "$out/bin/nns-rish-terminal"
     runHook postInstall
   '';
-  passthru = { inherit dex appId; };
+  passthru = { inherit dex terminal appId; };
 }

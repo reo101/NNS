@@ -57,7 +57,7 @@ mkdir -p /data/nix/lib
 chown 0:0 /data/nix/lib
 chmod 755 /data/nix/lib
 chcon u:object_r:system_data_file:s0 /data/nix/lib || exit 1
-for artifact in bin/nns-resolver lib/libnns-dns.so; do
+for artifact in bin/nns-resolver lib/libnns-dns.so bin/nns-rish-terminal; do
   rm -f "/data/nix/$artifact.new"
   cp "$MODDIR/$artifact" "/data/nix/$artifact.new" || exit 1
   chmod 755 "/data/nix/$artifact.new"

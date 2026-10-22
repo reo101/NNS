@@ -33,7 +33,7 @@ stdenvNoCC.mkDerivation {
     cp ${launcher}/bin/nix-enter module/bin/nix-enter
     cp ${dns}/bin/nns-resolver module/bin/nns-resolver
     cp ${dns}/lib/libnns-dns.so module/lib/libnns-dns.so
-    cp ${rish}/bin/rish ${rish}/bin/su ${rish}/bin/sudo ${rish}/bin/rish-probe module/bin/
+    cp ${rish}/bin/rish ${rish}/bin/su ${rish}/bin/sudo ${rish}/bin/rish-probe ${rish}/bin/nns-rish-terminal module/bin/
     cp ${rish}/lib/rish.dex module/lib/rish.dex
     cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh stage-android-runtime.sh system-generation.sh module/
     cp ${policy} module/sepolicy.rule

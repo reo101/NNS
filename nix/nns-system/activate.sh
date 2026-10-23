@@ -15,7 +15,7 @@ nix_conf=${NNS_NIX_CONF_DIRECTORY:-/data/nix/etc/nix}
 launcher=${NNS_LAUNCHER:-/data/nix/bin/nix-enter}
 # The entry point supplies this immutable PATH, never an application profile.
 export PATH="$sp/bin:/system/bin:/system/xbin"
-for tool in nix nix-env sleep runsvdir sv flock install mv mkdir cp chmod chown stat readlink ln rm find grep cut cat nohup; do
+for tool in nix nix-env sleep runsvdir sv flock install mv mkdir mktemp cp chmod chown stat readlink ln rm find grep cut cat nohup; do
     command -v "$tool" >/dev/null 2>&1 || fail "missing system tool: $tool"
 done
 valid_name() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9_-]*) return 1;; *) return 0;; esac;; *) return 1;; esac; }
@@ -46,7 +46,9 @@ for directory in profiles services authorized_keys; do
             profiles)
                 case $name in nns-system|system-profile) fail "reserved profile: $name";; esac
                 [ -d "$entry/bin" ] || fail "profile has no bin directory: $name";;
-            services) [ -x "$entry/run" ] || fail "service run script is not executable: $name";;
+            services)
+                [ -x "$entry/run" ] || fail "service run script is not executable: $name"
+                [ ! -f "$entry/oneshot" ] || [ -x "$entry/finish" ] || fail "oneshot has no finish script: $name";;
             authorized_keys) [ -f "$entry" ] || fail "invalid authorized keys: $name";;
         esac
     done
@@ -146,17 +148,43 @@ for directory in "$state/services"/*; do
         rm -rf -- "$directory"
     fi
 done
+# Stop and invalidate all finite jobs before publishing any new service.
+# A dependent process must not observe completion from a prior activation.
+for entry in "$generation/services"/*; do
+    [ -e "$entry" ] || continue
+    directory=$state/services/${entry##*/}
+    if [ -f "$entry/oneshot" ] || [ -f "$directory/oneshot" ]; then
+        if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
+            sv -w 10 down "$directory"
+        fi
+        rm -f "$directory/completed" "$directory/exit-status"
+    fi
+done
 for entry in "$generation/services"/*; do
     [ -e "$entry" ] || continue
     directory=$state/services/${entry##*/}
     check_directory "$directory"
     previous=$(readlink "$directory/run" 2>/dev/null || :)
     target=$(readlink -f "$entry/run")
-    mkdir -p "$directory"
-    chmod 700 "$directory"
-    ln -s "$target" "$directory/.run.$$"
-    mv -Tf "$directory/.run.$$" "$directory/run"
-    if [ "$previous" != "$target" ] && [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
+    previous_oneshot=false
+    if [ -f "$directory/oneshot" ]; then previous_oneshot=true; fi
+    # Prepare new directories outside runsvdir's watched tree.
+    destination=$directory
+    if [ ! -d "$directory" ]; then destination=$(mktemp -d "$state/.service.${entry##*/}.XXXXXXXX"); fi
+    chmod 700 "$destination"
+    ln -s "$target" "$destination/.run.$$"
+    mv -Tf "$destination/.run.$$" "$destination/run"
+    if [ -f "$entry/oneshot" ]; then
+        : > "$destination/oneshot"
+        : > "$destination/down"
+        ln -s "$(readlink -f "$entry/finish")" "$destination/.finish.$$"
+        mv -Tf "$destination/.finish.$$" "$destination/finish"
+    else
+        rm -f "$destination/oneshot" "$destination/finish"
+        if [ "$previous_oneshot" = true ]; then rm -f "$destination/down"; fi
+    fi
+    if [ "$destination" != "$directory" ]; then mv -T "$destination" "$directory"; fi
+    if [ ! -f "$entry/oneshot" ] && { [ "$previous" != "$target" ] || [ "$previous_oneshot" = true ]; } && [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
         sv -w 10 restart "$directory"
     fi
 done
@@ -176,6 +204,19 @@ if [ "$supervisor_running" = false ]; then
         9>&- </dev/null >>"$state/supervisor.log" 2>&1 &
     echo $! > "$state/supervisor.pid"
 fi
+# "up" is deliberately non-waiting. A successful oneshot can finish before
+# sv's process-running check; its completed marker is the readiness contract.
+for entry in "$generation/services"/*; do
+    [ -f "$entry/oneshot" ] || continue
+    directory=$state/services/${entry##*/}
+    attempts=0
+    until sv status "$directory" >/dev/null 2>&1; do
+        attempts=$((attempts + 1))
+        [ "$attempts" -lt 10 ] || fail "oneshot is not supervised: ${entry##*/}"
+        sleep 1
+    done
+    sv up "$directory"
+done
 if [ -d "$generation/services/nix-daemon" ]; then
     attempts=0
     until NIX_REMOTE=daemon "$sp/bin/nix" --extra-experimental-features nix-command store ping --store daemon >/dev/null 2>&1; do

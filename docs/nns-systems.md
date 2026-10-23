@@ -33,14 +33,16 @@ nns.lib.nnsSystem {
     services.openssh = {
       enable = true;
       port = 8022;
-      authorizedRootKeys = [ "ssh-ed25519 REPLACE_WITH_ADMIN_PUBLIC_KEY" ];
     };
+    accounts.root.openssh.authorizedKeys.keys = [
+      "ssh-ed25519 REPLACE_WITH_ADMIN_PUBLIC_KEY"
+    ];
     accounts.nix-on-droid = {
       uid = 10578;
       gid = 10578;
       home = "/data/data/com.termux.nix/files/home";
       shell = "${pkgs.zsh}/bin/zsh";
-      authorizedKeysFiles = [
+      openssh.authorizedKeys.runtimeFiles = [
         "/data/data/com.termux.nix/files/home/.ssh/authorized_keys"
       ];
     };
@@ -48,7 +50,7 @@ nns.lib.nnsSystem {
 }
 ```
 
-The UID and GID in this example are device-specific. They must match the installed app. Root SSH uses only `authorizedRootKeys`. It does not read the app's key file. App-owned key files are read after dropping to that account's UID and GID.
+The UID and GID in this example are device-specific. They must match the installed app. Each account declares SSH authorization through `openssh.authorizedKeys.keys` and `openssh.authorizedKeys.runtimeFiles`. The first contains literal public keys. The second contains runtime paths read after dropping to that account's UID and GID. Root runtime files are rejected. Root authorization must use declarative keys, not app-writable files.
 
 An account is a Unix identity record for an existing UID. Declaring an account does not create an Android user or app.
 
@@ -72,11 +74,45 @@ Activation restarts the daemon when group membership changes. Trust changes appl
 
 `nix.package` selects Nix for the daemon and administrative system profile. It defaults to `pkgs.nix`. Set `nix.package = pkgs.nixVersions.latest` to select the latest package.
 
-`nix.settings` supplies daemon configuration. `services.runit.<name>` accepts nixpkgs portable service modules with `process.argv` and `process.environment`. Its NNS options are `nns.enable`, `nns.startAt = "boot" | "unlock"`, and `nns.after`.
+`nix.settings` supplies daemon configuration. `services.runit.<name>` accepts nixpkgs portable service modules with `process.argv` and `process.environment`. Its NNS options are `nns.enable`, `nns.type = "longrun" | "oneshot"`, `nns.startAt = "boot" | "unlock"`, and `nns.after`.
 
 Service executables use store paths or Android system binaries. Root service PATH never includes an app profile. Nested services, `configData`, reload commands, notification protocols, and service PATH overrides are rejected. Dependencies must be enabled and acyclic.
 
 Each published profile contains `bin` and `etc/nns/environment`. The environment file contains quoted exports and CA certificate defaults. Identity and runtime variables such as HOME, USER, PATH, BASH_ENV, NNS_PROFILE, and NIX_REMOTE are rejected.
+
+## Finite jobs and directories
+
+Long-running services use `nns.type = "longrun"`, the default. Finite jobs use `nns.type = "oneshot"`:
+
+```nix
+services.runit.prepare-cache = {
+  nns.type = "oneshot";
+  process.argv = [ "${pkgs.coreutils}/bin/mkdir" "-p" "/data/nix/var/cache" ];
+};
+```
+
+Oneshot commands must be safe to repeat. A successful oneshot stops and creates `services/<name>/completed` under the NNS state directory. It leaves no keepalive process. Failed jobs retry through runit and record their exit code and signal in `exit-status`. A dependency listed in `nns.after` waits for oneshot completion or a running long-running process. Running does not imply application readiness.
+
+Every activation cancels and reschedules finite jobs. It clears previous completion before restarting dependent processes. Unlock jobs wait for credential-encrypted storage without blocking pre-unlock daemon startup. Activation dispatches these jobs asynchronously. Their completion markers report success. To rerun a job, use `sv up SERVICE_DIRECTORY`, not `sv restart`, which waits for a running process.
+
+Declare root-managed directories instead of writing setup daemons:
+
+```nix
+system.directories.emacs-server = {
+  path = "/data/nix/var/emacs-server";
+  owner = "emacs";
+  group = "nix-on-droid";
+  mode = "2710";
+  startAt = "unlock";
+  selinuxContextFromAccount = "emacs";
+};
+```
+
+Owner and group refer to account names and resolve to their configured UID and GID. Each declaration generates a `directory-<name>` oneshot. The parent must exist, be root-owned, and have no group or other write permission. The job holds directory file descriptors and rejects symlinks instead of following mutable paths during metadata changes.
+
+`selinuxContextFromAccount` is optional. If set, the job checks the source home's configured UID and GID before copying its Android SELinux label. It does not adopt a different installed app identity. UID drift fails the job until the account declaration is corrected.
+
+Directory jobs reapply metadata on activation. They do not watch for later changes, start Emacs, create its socket, or delete directory contents when a declaration is removed.
 
 ## Generation activation
 
@@ -86,7 +122,7 @@ Activation requires root and a serialized lock. It rejects app-owned administrat
 
 Profile publication uses `nix-env --profile ... --set ...` against already-realized store paths. It uses the local store as root, so boot does not require an existing daemon. Standard per-user profile directories are delegated to declared accounts. NNS retains ownership of their administrative parent.
 
-Runit reconciles the service directories. Changed supervised services restart. Daemon and SSH configuration dependencies are included in their run scripts, so configuration changes also trigger a restart. The daemon and SSH master receive signals directly, without an extra launcher monitor. The supervisor enters the staged namespace through the native launcher.
+Runit reconciles the service directories. Changed long-running services restart. Oneshots are rescheduled on each activation, with their previous completion invalidated first. Daemon and SSH configuration dependencies are included in their run scripts, so configuration changes also trigger a restart. The daemon and SSH master receive signals directly, without an extra launcher monitor. The supervisor enters the staged namespace through the native launcher.
 
 The launcher supplies a fresh `/var/empty` in its private tmpfs root. It preserves the other `/var` entries through directory bind mounts and file references. OpenSSH runs unchanged. No binary copies, byte patches, or host `/var` writes are needed. The `sshd` account uses Android's existing nobody identity, UID/GID 9999, not a new app UID.
 
@@ -157,6 +193,7 @@ nix build --builders '' .#checks.x86_64-linux.nns-generation
 nix run .#test-userns
 nix run .#test-emacs
 nix run .#test-nns-activation
+nix run .#test-nns-services
 nix run .#test-nns-boot
 ```
 

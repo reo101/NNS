@@ -8,7 +8,7 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / 'nix/nns-system/activate.sh'
 REQUIRED_TOOLS = ('nix', 'nix-env', 'sleep', 'runsvdir', 'sv', 'flock', 'install', 'mv', 'mkdir', 'id',
                   'cp', 'chmod', 'chown', 'stat', 'readlink', 'ln', 'rm', 'find', 'grep',
-                  'cut', 'cat', 'nohup')
+                  'cut', 'cat', 'nohup', 'mktemp')
 
 
 class ActivationTest(unittest.TestCase):
@@ -158,6 +158,41 @@ ln -sfn "$2" "$profile"
         self.assertFalse((services / 'stale').exists())
         self.assertEqual((services / 'example/run').resolve(),
                          (self.gen / 'services/example/run').resolve())
+
+    def test_oneshots_reapply_without_waiting_for_a_running_process(self):
+        job = self.gen / 'services/prepare'
+        job.mkdir()
+        (job / 'oneshot').touch()
+        for name in ('run', 'finish'):
+            script = job / name
+            script.write_text('#!/bin/sh\nexit 0\n')
+            script.chmod(0o755)
+        log = self.base / 'sv.log'
+        (self.bin / 'sv').write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log}"\n')
+        result = self.run_activation()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        service = self.base / 'state/nns/services/prepare'
+        self.assertTrue((service / 'down').exists())
+        self.assertEqual((service / 'finish').resolve(), (job / 'finish').resolve())
+        (service / 'completed').touch()
+        control = service / 'supervise/control'
+        control.parent.mkdir()
+        os.mkfifo(control)
+        result = self.run_activation()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((service / 'completed').exists())
+        commands = log.read_text()
+        self.assertIn(f'-w 10 down {service}', commands)
+        self.assertEqual(commands.count(f'up {service}'), 2)
+        self.assertNotIn(f'restart {service}', commands)
+        (job / 'oneshot').unlink()
+        (job / 'finish').unlink()
+        result = self.run_activation()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((service / 'oneshot').exists())
+        self.assertFalse((service / 'finish').exists())
+        self.assertFalse((service / 'down').exists())
+        self.assertIn(f'-w 10 restart {service}', log.read_text())
 
     def test_nonroot_rejected(self):
         if os.getuid() == 0:

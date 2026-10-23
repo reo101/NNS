@@ -11,10 +11,8 @@ let
             pkgs.git
             pkgs.bashInteractive
           ];
-          services.openssh = {
-            enable = true;
-            authorizedRootKeys = [ "ssh-ed25519 AAAATEST evaluation-only" ];
-          };
+          services.openssh.enable = true;
+          accounts.root.openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAATEST evaluation-only" ];
         }
       ]
       ++ modules;
@@ -23,7 +21,9 @@ let
   daemonChanged = evaluate [ { nix.settings.max-jobs = 1; } ];
   keysChanged = evaluate [
     {
-      services.openssh.authorizedRootKeys = pkgs.lib.mkForce [ "ssh-ed25519 AAAANEW evaluation-only" ];
+      accounts.root.openssh.authorizedKeys.keys = pkgs.lib.mkForce [
+        "ssh-ed25519 AAAANEW evaluation-only"
+      ];
     }
   ];
   profileChanged = evaluate [ { environment.profiles.development.variables.EDITOR = "editor"; } ];

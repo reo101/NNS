@@ -89,6 +89,14 @@ let
               };
             };
             nns = {
+              type = mkOption {
+                type = types.enum [
+                  "longrun"
+                  "oneshot"
+                ];
+                default = "longrun";
+                description = "Supervise a persistent process or retry a finite job until it succeeds.";
+              };
               enable = mkOption {
                 type = types.bool;
                 default = true;
@@ -121,12 +129,24 @@ let
       export HOME=${lib.escapeShellArg cfg.accounts.root.home}
       export TMPDIR=/data/nix/tmp
       export NIX_CONF_DIR=${lib.escapeShellArg cfg.system.nixConfDirectory}
+      ${lib.optionalString (service.nns.type == "oneshot") ''
+        cd ${lib.escapeShellArg "${state}/services/${name}"}
+        rm -f completed down exit-status
+      ''}
       ${lib.optionalString (service.nns.startAt == "unlock") /* bash */ ''
         until [ "$(/system/bin/getprop sys.user.0.ce_available)" = true ]; do sleep 5; done
       ''}
-      ${lib.concatMapStrings (dependency: ''
-        until sv status ${lib.escapeShellArg "${state}/services/${dependency}"} 2>/dev/null | grep -q '^run:'; do sleep 1; done
-      '') service.nns.after}
+      ${lib.concatMapStrings (
+        dependency:
+        if enabledServices.${dependency}.nns.type == "oneshot" then
+          ''
+            until [ -f ${lib.escapeShellArg "${state}/services/${dependency}/completed"} ]; do sleep 1; done
+          ''
+        else
+          ''
+            until sv status ${lib.escapeShellArg "${state}/services/${dependency}"} 2>/dev/null | grep -q '^run:'; do sleep 1; done
+          ''
+      ) service.nns.after}
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (
           key: value: if value == null then /* bash */ "unset ${key}" else /* bash */ "export ${key}=${lib.escapeShellArg value}"
@@ -134,13 +154,56 @@ let
       )}
       exec ${lib.escapeShellArgs service.process.argv}
     '';
+  renderFinish =
+    name:
+    pkgs.writeShellScript "nns-service-${name}-finish" ''
+      set -eu
+      printf '%s %s\n' "$1" "$2" > exit-status
+      if [ "$1" = 0 ] && [ "$2" = 0 ]; then
+        : > completed
+        : > down
+        exec ${infrastructure}/bin/sv down .
+      fi
+    '';
+  directoryType = types.submodule (
+    { config, ... }: {
+      options = {
+        path = mkOption { type = types.str; };
+        owner = mkOption {
+          type = types.enum (builtins.attrNames cfg.accounts);
+          default = "root";
+        };
+        group = mkOption {
+          type = types.enum (builtins.attrNames cfg.accounts);
+          default = config.owner;
+        };
+        mode = mkOption {
+          type = types.strMatching "[0-7]{3,4}";
+          default = "0755";
+        };
+        startAt = mkOption {
+          type = types.enum [
+            "boot"
+            "unlock"
+          ];
+          default = "boot";
+        };
+        after = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+        };
+        selinuxContextFromAccount = mkOption {
+          type = types.nullOr (types.enum (builtins.attrNames cfg.accounts));
+          default = null;
+          description = "Copy the account home's SELinux label after checking its configured UID and GID.";
+        };
+      };
+    }
+  );
   keyFiles = lib.mapAttrs (
     name: account:
     pkgs.writeText "nns-authorized-keys-${name}" (
-      lib.concatStringsSep "\n" (
-        if name == "root" then cfg.services.openssh.authorizedRootKeys else account.publicKeys
-      )
-      + "\n"
+      lib.concatStringsSep "\n" account.openssh.authorizedKeys.keys + "\n"
     )
   ) cfg.accounts;
   authorizedKeys = pkgs.writeShellScript "nns-authorized-keys" ''
@@ -158,7 +221,7 @@ let
                 --clear-groups \
                 ${lib.getExe' pkgs.coreutils "cat"} ${lib.escapeShellArg file}
             fi
-          '') account.authorizedKeysFiles}
+          '') account.openssh.authorizedKeys.runtimeFiles}
           ;;
       '') cfg.accounts
     )}
@@ -245,6 +308,10 @@ let
       lib.mapAttrsToList (name: service: ''
         mkdir -p "$out/services/${name}"
         ln -s ${renderService name service} "$out/services/${name}/run"
+        ${lib.optionalString (service.nns.type == "oneshot") ''
+          touch "$out/services/${name}/oneshot"
+          ln -s ${renderFinish name} "$out/services/${name}/finish"
+        ''}
       '') enabledServices
     )}
     ${lib.concatStringsSep "\n" (
@@ -317,6 +384,11 @@ in
         type = types.str;
         default = "/data/nix/etc/nix";
       };
+      directories = mkOption {
+        type = types.attrsOf directoryType;
+        default = { };
+        description = "Root-managed directories, applied by generated directory-<name> oneshot jobs on each activation.";
+      };
       launcher = mkOption {
         type = types.str;
         default = "/data/nix/bin/nix-enter";
@@ -358,10 +430,6 @@ in
               type = types.port;
               default = 8022;
             };
-            authorizedRootKeys = mkOption {
-              type = types.listOf types.str;
-              default = [ ];
-            };
             extraConfig = mkOption {
               type = types.lines;
               default = "";
@@ -393,13 +461,17 @@ in
                 type = types.str;
                 default = "${pkgs.bashInteractive}/bin/bash";
               };
-              publicKeys = mkOption {
-                type = types.listOf types.str;
-                default = [ ];
-              };
-              authorizedKeysFiles = mkOption {
-                type = types.listOf types.str;
-                default = [ ];
+              openssh.authorizedKeys = {
+                keys = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = "Declarative SSH public keys authorized for this account.";
+                };
+                runtimeFiles = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = "Runtime authorized-key files read as this account's UID/GID, never as root.";
+                };
               };
             };
           }
@@ -434,23 +506,44 @@ in
       shell = "/system/bin/false";
     };
     system.build.toplevel = generation;
-    services.runit = {
-      nix-daemon.process = {
-        argv = [ "${cfg.nix.package}/bin/nix-daemon" ];
-        environment.NIX_REMOTE = "local";
+    services.runit =
+      lib.mapAttrs' (
+        name: directory:
+        lib.nameValuePair "directory-${name}" {
+          nns = {
+            type = "oneshot";
+            inherit (directory) startAt after;
+          };
+          process.argv = [
+            (import ./directory.nix {
+              inherit
+                lib
+                pkgs
+                name
+                directory
+                ;
+              accounts = cfg.accounts;
+            })
+          ];
+        }
+      ) cfg.system.directories
+      // {
+        nix-daemon.process = {
+          argv = [ "${cfg.nix.package}/bin/nix-daemon" ];
+          environment.NIX_REMOTE = "local";
+        };
+        sshd = lib.mkIf cfg.services.openssh.enable {
+          # The supervisor already provides /nix and the staged /etc. Avoid a
+          # launcher monitor here so runit sends TERM directly to the daemon.
+          process.argv = [
+            "${pkgs.openssh}/bin/sshd"
+            "-D"
+            "-e"
+            "-f"
+            "${state}/sshd_config"
+          ];
+        };
       };
-      sshd = lib.mkIf cfg.services.openssh.enable {
-        # The supervisor already provides /nix and the staged /etc. Avoid a
-        # launcher monitor here so runit sends TERM directly to the daemon.
-        process.argv = [
-          "${pkgs.openssh}/bin/sshd"
-          "-D"
-          "-e"
-          "-f"
-          "${state}/sshd_config"
-        ];
-      };
-    };
     assertions =
       lib.mapAttrsToList (name: profile: {
         assertion =
@@ -465,6 +558,17 @@ in
           );
         message = "Invalid or reserved NNS environment name/variable: ${name}";
       }) cfg.environment.profiles
+      ++ lib.mapAttrsToList (name: directory: {
+        assertion =
+          validName name
+          && lib.hasPrefix "/" directory.path
+          && builtins.all (part: part != "" && part != "." && part != "..") (
+            lib.drop 1 (lib.splitString "/" directory.path)
+          )
+          && !(lib.hasInfix "\n" directory.path)
+          && !(lib.hasInfix "\r" directory.path);
+        message = "Invalid NNS directory path or name: ${name}";
+      }) cfg.system.directories
       ++ lib.mapAttrsToList (name: account: {
         assertion =
           validName name
@@ -523,12 +627,12 @@ in
           message = "NNS service ordering contains a dependency cycle";
         }
         {
-          assertion = !cfg.services.openssh.enable || cfg.services.openssh.authorizedRootKeys != [ ];
+          assertion = !cfg.services.openssh.enable || cfg.accounts.root.openssh.authorizedKeys.keys != [ ];
           message = "NNS root SSH requires explicit administrative public keys";
         }
         {
           assertion =
-            cfg.accounts.root.authorizedKeysFiles == [ ]
+            cfg.accounts.root.openssh.authorizedKeys.runtimeFiles == [ ]
             &&
               builtins.length (lib.unique (map (account: account.uid) (builtins.attrValues cfg.accounts)))
               == builtins.length (builtins.attrNames cfg.accounts);

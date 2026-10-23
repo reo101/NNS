@@ -11,6 +11,7 @@ import time
 SERIAL = os.environ.get('ANDROID_SERIAL', '27211FDH3004Q4')
 SSH_TARGET = 'nix-on-droid@cheetah.lan'
 SERVER_SOCKET = '/data/nix/var/emacs-server/server'
+DIRECTORY_JOB = '/data/nix/var/nns/services/directory-emacs-server'
 
 
 def execute(arguments, timeout=10):
@@ -55,17 +56,18 @@ def prepare():
         return root('test -p /data/nix/var/nns/services/sshd/supervise/control').returncode == 0
 
     wait_for('pre-unlock sshd supervision', sshd_supervised)
-    require(root('test ! -e /data/nix/var/nns/ready/unlock'), 'unlock marker absent before unlock')
-    require(root('test -p /data/nix/var/nns/services/emacs-socket/supervise/control'),
-            'Emacs socket service supervised before unlock')
-    print('Pre-unlock: sshd supervised; unlock marker absent; Emacs service gated.')
+    require(root(f'test ! -e {DIRECTORY_JOB}/completed'), 'directory job incomplete before unlock')
+    require(root(f'test -p {DIRECTORY_JOB}/supervise/control'),
+            'Emacs directory job supervised before unlock')
+    print('Pre-unlock: sshd supervised; Emacs directory job gated and incomplete.')
     print('Unlock cheetah, then run: python3 tests/device-boot-smoke.py verify', flush=True)
 
 
 def verify():
     wait_for('credential-encrypted storage',
              lambda: adb('getprop sys.user.0.ce_available').stdout.strip() == 'true')
-    wait_for('unlock marker', lambda: root('test -e /data/nix/var/nns/ready/unlock').returncode == 0)
+    wait_for('Emacs directory job completion',
+             lambda: root(f'test -f {DIRECTORY_JOB}/completed').returncode == 0)
 
     emacs_home = '/data/data/org.gnu.emacs/files'
     client_home = '/data/data/com.termux.nix/files/home'
@@ -84,14 +86,14 @@ def verify():
     wait_for('NoD SSH login', lambda: execute(ssh + ['true']).returncode == 0)
     require(execute(ssh + [
         'NIX_CONF_DIR=/data/nix/etc/nix NIX_REMOTE=daemon '
-        '/nix/var/nix/profiles/default/bin/nix '
+        '/nix/var/nix/profiles/system-profile/bin/nix '
         '--extra-experimental-features nix-command store info --store daemon'
     ]), 'query Nix daemon')
     require(adb('am start -n org.gnu.emacs/.EmacsActivity'), 'launch Android Emacs')
     wait_for('live Emacs server socket', lambda: root(
         f'test -S {SERVER_SOCKET} && grep -Fq {SERVER_SOCKET} /proc/net/unix'
     ).returncode == 0, seconds=90)
-    client = '/nix/var/nix/profiles/default/bin/emacsclient'
+    client = '/nix/var/nix/profiles/development/bin/emacsclient'
     wait_for('responsive Emacs server', lambda: execute(ssh + [
         f"{client} -s {SERVER_SOCKET} --eval t"
     ], timeout=20).stdout.strip() == 't', seconds=90)
@@ -100,7 +102,7 @@ def verify():
     ], timeout=20), 'connect to Android Emacs')
     if graphical != 't':
         raise RuntimeError(f'Android Emacs did not report a graphical display: {graphical}')
-    print('Post-unlock: marker, SSH, Nix daemon, socket permissions, and graphical Emacs server passed.')
+    print('Post-unlock: directory job, SSH, Nix daemon, socket permissions, and graphical Emacs server passed.')
 
 
 if __name__ == '__main__':

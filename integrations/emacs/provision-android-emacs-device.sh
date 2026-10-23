@@ -11,10 +11,11 @@ ssh_dir=$emacs_home/.ssh
 known_hosts=$ssh_dir/known_hosts
 host_key=/data/nix/var/nns/ssh_host_ed25519_key.pub
 socket_dir=/data/nix/var/emacs-server
-control=/data/nix/var/nns/services/emacs-socket/supervise/control
+directory_job=/data/nix/var/nns/services/directory-emacs-server
+control=$directory_job/supervise/control
 
 [ -f "$host_key" ] || { echo 'NNS SSH host key is missing' >&2; exit 1; }
-[ -p "$control" ] || { echo 'Emacs socket service is not supervised' >&2; exit 1; }
+[ -p "$control" ] || { echo 'Emacs directory job is not supervised' >&2; exit 1; }
 
 emacs_uid=$(/system/bin/stat -c %u "$emacs_home")
 emacs_gid=$(/system/bin/stat -c %g "$emacs_home")
@@ -108,13 +109,15 @@ fi
 /system/bin/chcon "$nod_context" "$authorized_keys"
 /system/bin/chmod 600 "$authorized_keys"
 
-# Reuse the existing unlock-gated service, including its UID and label checks.
-/system/bin/printf t > "$control"
+# Reapply the declared directory after app provisioning. The job validates
+# the installed app against its configured account rather than adopting a UID.
+/system/bin/rm -f "$directory_job/completed"
+/system/bin/printf u > "$control"
 for _attempt in 1 2 3 4 5 6 7 8 9 10; do
-  if [ "$(/system/bin/stat -c '%u:%g:%a:%C' "$socket_dir")" = "$emacs_uid:$nod_gid:2710:$emacs_context" ]; then
+  if [ -f "$directory_job/completed" ] && [ "$(/system/bin/stat -c '%u:%g:%a:%C' "$socket_dir")" = "$emacs_uid:$nod_gid:2710:$emacs_context" ]; then
     exit 0
   fi
   /system/bin/sleep 1
 done
-echo 'Emacs socket service did not provision its directory' >&2
+echo 'Emacs directory job did not complete with the expected metadata' >&2
 exit 1

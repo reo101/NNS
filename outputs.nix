@@ -121,6 +121,14 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
               ${./tests/nns-integration-test.el}
           '';
         };
+        serviceTestFixture = import ./tests/nns-service-fixture.nix { inherit pkgs; };
+        serviceTests = pkgs.writeShellApplication {
+          name = "nns-test-services";
+          runtimeInputs = [ pkgs.python3 pkgs.util-linux pkgs.coreutils ];
+          text = ''
+            exec python3 ${./tests/test-nns-services.py} ${lib.getExe hostLauncher} ${serviceTestFixture}
+          '';
+        };
         systemTestSource = lib.fileset.toSource {
           root = ./.;
           fileset = lib.fileset.unions [
@@ -156,6 +164,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           test-userns = usernsTest;
           test-emacs = emacsTest;
           test-nns-activation = activationTest;
+          test-nns-services = serviceTests;
           test-nns-boot = bootTest;
         } // lib.optionalAttrs (system == "x86_64-linux") {
           kernel-android-test = androidTestKernel;
@@ -188,10 +197,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
             inherit pkgs system;
             modules = [{
               environment.profiles.development.packages = [ pkgs.git pkgs.bashInteractive ];
-              services.openssh = {
-                enable = true;
-                authorizedRootKeys = [ "ssh-ed25519 AAAATEST evaluation-only" ];
-              };
+              services.openssh.enable = true;
+              accounts.root.openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAATEST evaluation-only" ];
             }];
           }).config.system.build.toplevel;
           nns-reconfiguration = import ./tests/test-nns-reconfiguration.nix { inherit pkgs; };

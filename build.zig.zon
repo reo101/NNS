@@ -1,0 +1,22 @@
+.{
+    .name = .nns,
+    .version = "3.2.0",
+    .fingerprint = 0x8f7a599788265111,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .translate_c = .{
+            .url = "https://codeberg.org/ziglang/translate-c/archive/cfac21f3199b2b02ce3fd7db652aa456421fe4ab.tar.gz",
+            .hash = "translate_c-2.0.2-Q_BUWvBNBwDnyehSiuAJmdFcMYHYGA-Jc3KiYdrV2Dqx",
+        },
+    },
+    .paths = .{
+        "build.zig",                                "build.zig.zon",
+        "module/src/nix-enter.zig",                 "module/src/dns-bridge.zig",
+        "module/src/dns-wire.zig",                  "module/src/dns-resolver.zig",
+        "module/src/dns-resolver.h",                "integrations/shizuku/rish-terminal.zig",
+        "integrations/shizuku/rish-terminal.h",     "experiments/activation/service-control.zig",
+        "experiments/activation/service-control.h", "experiments/activation/test-service-control.py",
+        "tests/test-dns.py",                        "tests/test-rish-terminal.py",
+        "tests/test-userns.py",
+    },
+}

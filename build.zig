@@ -1,20 +1,41 @@
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{ .default_target = .{ .os_tag = .linux, .abi = .musl } });
     const optimize = b.standardOptimizeOption(.{});
-    const sysroot = b.option([]const u8, "android-sysroot", "NDK toolchain/sysroot (required for the Android helper)");
-    const arch = b.option(std.Target.Cpu.Arch, "arch", "Android CPU architecture") orelse .aarch64;
+    const arch = b.option(std.Target.Cpu.Arch, "arch", "Android CPU architecture") orelse target.result.cpu.arch;
     if (arch != .aarch64 and arch != .x86_64) @panic("NNS supports aarch64 and x86_64");
-    const triple = b.fmt("{s}-linux-android", .{@tagName(arch)});
-    const android = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .linux, .abi = .android, .android_api_level = 29 });
-    const glibc = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .linux, .abi = .gnu });
+    const sysroot = b.option([]const u8, "android-sysroot", "NDK toolchain/sysroot for Android binaries");
+    const translate_c = b.dependency("translate_c", .{ .optimize = .small });
+    const all = b.step("all", "Install all core native artifacts (requires Android sysroot)");
+    const tests = b.step("test", "Run sandbox-safe native tests");
+    const host = b.resolveTargetQuery(.{ .cpu_arch = b.graph.host.result.cpu.arch, .os_tag = .linux, .abi = .musl });
 
+    const launcher = executable(b, "nix-enter", "module/src/nix-enter.zig", target, optimize, false);
+    install(b, all, "nix-enter", launcher);
+    const launcher_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("module/src/nix-enter.zig"),
+        .target = host,
+        .optimize = .debug,
+    }) });
+    const test_launcher = b.step("test-nix-enter", "Run launcher allocation and environment unit tests");
+    test_launcher.dependOn(&b.addRunArtifact(launcher_tests).step);
+    tests.dependOn(test_launcher);
+    const namespace_launcher = executable(b, "nix-enter-test", "module/src/nix-enter.zig", host, .debug, false);
+    const namespace_tests = pythonTest(b, "tests/test-userns.py", namespace_launcher);
+    b.step("test-userns", "Run launcher tests outside the Nix sandbox (requires user namespaces)").dependOn(&namespace_tests.step);
+
+    const glibc = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .linux, .abi = .gnu });
     const bridge = addBridge(b, "nns-dns", glibc, optimize);
-    b.installArtifact(bridge);
+    const dns = b.step("dns", "Install the libc-neutral preload and Android resolver");
+    dns.dependOn(&b.addInstallArtifact(bridge, .{}).step);
+    all.dependOn(dns);
+    const terminal_step = b.step("rish-terminal", "Install the Android terminal supervisor");
+    all.dependOn(terminal_step);
     if (sysroot) |root| {
-        // Zig knows the Android ABI, but the NDK supplies Bionic headers, link
-        // stubs and CRT objects. Generate its libc descriptor in the build
-        // cache instead of checking machine-specific paths into the repo.
+        const triple = b.fmt("{s}-linux-android", .{@tagName(arch)});
+        const android = b.resolveTargetQuery(.{ .cpu_arch = arch, .os_tag = .linux, .abi = .android, .android_api_level = 29 });
         const libdir = b.fmt("{s}/usr/lib/{s}/29", .{ root, triple });
         const libc_file = b.addWriteFiles().add("android-libc.conf", b.fmt(
             \\include_dir={s}/usr/include
@@ -26,79 +47,101 @@ pub fn build(b: *std.Build) void {
             \\darwin_sdk_dir=
             \\
         , .{ root, root, triple, libdir, libdir }));
-        const resolver = b.addExecutable(.{
-            .name = "nns-resolver",
-            .linkage = .dynamic,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("module/src/dns-resolver.zig"),
-                .target = android,
-                .optimize = optimize,
-                .link_libc = true,
-                .strip = true,
-            }),
-        });
-        resolver.setLibCFile(libc_file);
-        resolver.root_module.addLibraryPath(.{ .cwd_relative = libdir });
-        b.installArtifact(resolver);
-        const terminal = b.addExecutable(.{
-            .name = "nns-rish-terminal",
-            .linkage = .dynamic,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("integrations/shizuku/rish-terminal.zig"),
-                .target = android,
-                .optimize = optimize,
-                .link_libc = true,
-                .strip = true,
-            }),
-        });
-        terminal.setLibCFile(libc_file);
-        terminal.root_module.addLibraryPath(.{ .cwd_relative = libdir });
         inline for (.{
-            .{ resolver.root_module, "module/src/dns-resolver.h" },
-            .{ terminal.root_module, "integrations/shizuku/rish-terminal.h" },
-        }) |binding| {
-            const translation = b.addTranslateC(.{
-                .root_source_file = b.path(binding[1]),
+            .{ "nns-resolver", "module/src/dns-resolver.zig", "module/src/dns-resolver.h", dns },
+            .{ "nns-rish-terminal", "integrations/shizuku/rish-terminal.zig", "integrations/shizuku/rish-terminal.h", terminal_step },
+        }) |artifact| {
+            const exe = executable(b, artifact[0], artifact[1], android, optimize, true);
+            exe.linkage = .dynamic;
+            exe.setLibCFile(libc_file);
+            exe.root_module.addLibraryPath(.{ .cwd_relative = libdir });
+            const translation: Translator = .init(translate_c, .{
+                .c_source_file = b.path(artifact[2]),
                 .target = android,
                 .optimize = optimize,
+                .libc_file = libc_file,
             });
-            translation.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/{s}", .{ root, triple }) });
-            translation.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{root}) });
-            binding[0].addImport("c", translation.createModule());
+            exe.root_module.addImport("c", translation.mod);
+            artifact[3].dependOn(&b.addInstallArtifact(exe, .{}).step);
         }
-        const terminal_step = b.step("rish-terminal", "Build the Android terminal supervisor");
-        terminal_step.dependOn(&b.addInstallArtifact(terminal, .{}).step);
     } else {
-        b.getInstallStep().dependOn(&b.addFail("pass -Dandroid-sysroot=/path/to/ndk/toolchains/llvm/prebuilt/<host>/sysroot").step);
+        const missing = b.addFail("pass -Dandroid-sysroot=/path/to/ndk/toolchain/sysroot");
+        dns.dependOn(&missing.step);
+        terminal_step.dependOn(&missing.step);
     }
 
-    const tests = b.step("test", "Run wire validation and host glibc preload integration tests (no NDK needed)");
-    const unit = b.addTest(.{ .root_module = b.createModule(.{
+    const wire_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("module/src/dns-wire.zig"),
         .target = b.graph.host,
         .optimize = .debug,
     }) });
-    tests.dependOn(&b.addRunArtifact(unit).step);
-    const host_bridge = addBridge(b, "nns-dns-host", b.graph.host, .debug);
-    const integration = b.addSystemCommand(&.{"python3"});
-    integration.addFileArg(b.path("tests/test-dns.py"));
-    integration.addArtifactArg(host_bridge);
-    tests.dependOn(&integration.step);
+    const test_dns = b.step("test-dns", "Run wire validation and host glibc preload tests");
+    test_dns.dependOn(&b.addRunArtifact(wire_tests).step);
+    test_dns.dependOn(&pythonTest(b, "tests/test-dns.py", addBridge(b, "nns-dns-test", b.graph.host, .debug)).step);
+    tests.dependOn(test_dns);
+
+    const terminal = terminalExecutable(b, translate_c, "nns-rish-terminal-host", host, .debug);
+    const test_terminal = b.step("test-rish-terminal", "Run native terminal transport tests");
+    test_terminal.dependOn(&pythonTest(b, "tests/test-rish-terminal.py", terminal).step);
+    tests.dependOn(test_terminal);
+    const control = controlExecutable(b, translate_c, "nns-service-control", target, optimize);
+    install(b, all, "service-control", control);
+    const test_control = b.step("test-service-control", "Run the FIFO client against real runsv");
+    const control_run = b.addSystemCommand(&.{"env"});
+    control_run.addArtifactArg2(controlExecutable(b, translate_c, "nns-service-control-test", host, .debug), .{ .prefix = "NNS_SERVICE_CONTROL=" });
+    control_run.addArg("python3");
+    control_run.addFileArg2(b.path("experiments/activation/test-service-control.py"), .{});
+    test_control.dependOn(&control_run.step);
+    tests.dependOn(test_control);
+
+    b.getInstallStep().dependOn(all);
+}
+
+fn executable(b: *std.Build, name: []const u8, source: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, libc: bool) *std.Build.Step.Compile {
+    return b.addExecutable(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path(source),
+        .target = target,
+        .optimize = optimize,
+        .strip = optimize != .debug,
+        .link_libc = libc,
+    }), .name = name });
+}
+
+fn install(b: *std.Build, all: *std.Build.Step, name: []const u8, artifact: *std.Build.Step.Compile) void {
+    const step = b.step(name, b.fmt("Install {s}", .{name}));
+    step.dependOn(&b.addInstallArtifact(artifact, .{}).step);
+    all.dependOn(step);
+}
+
+fn pythonTest(b: *std.Build, source: []const u8, artifact: *std.Build.Step.Compile) *std.Build.Step.Run {
+    const run = b.addSystemCommand(&.{"python3"});
+    run.addFileArg2(b.path(source), .{});
+    run.addArtifactArg2(artifact, .{});
+    return run;
+}
+
+fn terminalExecutable(b: *std.Build, translate_c: *std.Build.Dependency, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Step.Compile {
+    const exe = executable(b, name, "integrations/shizuku/rish-terminal.zig", target, optimize, true);
+    const translation: Translator = .init(translate_c, .{ .c_source_file = b.path("integrations/shizuku/rish-terminal.h"), .target = target, .optimize = optimize });
+    exe.root_module.addImport("c", translation.mod);
+    return exe;
+}
+
+fn controlExecutable(b: *std.Build, translate_c: *std.Build.Dependency, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Step.Compile {
+    const exe = executable(b, name, "experiments/activation/service-control.zig", target, optimize, true);
+    const translation: Translator = .init(translate_c, .{ .c_source_file = b.path("experiments/activation/service-control.h"), .target = target, .optimize = optimize });
+    exe.root_module.addImport("c", translation.mod);
+    return exe;
 }
 
 fn addBridge(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Step.Compile {
-    const library = b.addLibrary(.{
-        .name = name,
-        .linkage = .dynamic,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("module/src/dns-bridge.zig"),
-            .target = target,
-            .optimize = optimize,
-            .strip = optimize != .debug,
-        }),
-    });
-    // Resolve the small shared C ABI from the loading process. Linking glibc
-    // here would make LD_PRELOAD fatal for Android/Bionic shell children.
+    const library = b.addLibrary(.{ .name = name, .linkage = .dynamic, .root_module = b.createModule(.{
+        .root_source_file = b.path("module/src/dns-bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = optimize != .debug,
+    }) });
+    // This library must resolve libc symbols in the loading process, not pin glibc.
     library.linker_allow_shlib_undefined = true;
     return library;
 }

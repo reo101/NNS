@@ -1,4 +1,11 @@
-{ lib, pkgs, stdenvNoCC, zig, arch ? "aarch64" }:
+{
+  lib,
+  pkgs,
+  stdenvNoCC,
+  zig,
+  callPackage,
+  arch ? "aarch64",
+}:
 let
   androidPkgs = import pkgs.path {
     localSystem = pkgs.stdenv.buildPlatform.system;
@@ -6,46 +13,49 @@ let
     config.allowUnfree = true;
   };
   toolchain = androidPkgs.stdenv.cc.cc;
+  dependencies = callPackage ./zig-dependencies.nix { };
+  source = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../build.zig
+      ../build.zig.zon
+      ../integrations/shizuku/rish-terminal.zig
+      ../integrations/shizuku/rish-terminal.h
+      ../tests/test-rish-terminal.py
+    ];
+  };
 in
 stdenvNoCC.mkDerivation {
   pname = "nns-rish-terminal-${arch}";
   version = "1";
-  src = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.unions [
-      ../build.zig
-      ../module/src/dns-wire.zig
-      ../module/src/dns-bridge.zig
-      ../module/src/dns-resolver.zig
-      ../integrations/shizuku/rish-terminal.zig
-      ../integrations/shizuku/rish-terminal.h
-    ];
-  };
+  src = source;
   nativeBuildInputs = [ zig ];
   dontConfigure = true;
   dontFixup = true;
-  dontSetZigDefaultFlags = true;
   allowedReferences = [ ];
   buildPhase = ''
-    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-    zig build rish-terminal -Doptimize=small -Darch=${arch} \
+    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+    zig build rish-terminal --system ${dependencies} -Doptimize=small -Darch=${arch} \
       -Dandroid-sysroot=${toolchain}/toolchain/sysroot --prefix "$PWD/result"
   '';
   installPhase = ''
     install -Dm755 result/bin/nns-rish-terminal "$out/bin/nns-rish-terminal"
   '';
-  passthru.tests.native = pkgs.runCommand "check-nns-rish-terminal" {
-    nativeBuildInputs = [ zig pkgs.python3 ];
-  } ''
-    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-    zig translate-c -lc -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
-      ${../integrations/shizuku/rish-terminal.h} > terminal-c.zig
-    zig build-exe -lc -O debug -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
-      --dep c -Mroot=${../integrations/shizuku/rish-terminal.zig} \
-      -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl -Mc=terminal-c.zig \
-      -femit-bin=nns-rish-terminal
-    python3 ${../tests/test-rish-terminal.py} "$PWD/nns-rish-terminal"
-    touch "$out"
-  '';
+  passthru.tests.native =
+    pkgs.runCommand "check-nns-rish-terminal"
+      {
+        nativeBuildInputs = [
+          zig
+          pkgs.python3
+        ];
+      }
+      ''
+        cp -r ${source} source
+        chmod -R u+w source
+        cd source
+        export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+        zig build test-rish-terminal --system ${dependencies}
+        touch "$out"
+      '';
   meta.license = lib.licenses.asl20;
 }

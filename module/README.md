@@ -182,8 +182,9 @@ nix build .#nns-module           # -> result/nns-module.zip (launcher + bridge +
 nix build .#nns-sepolicy         # -> rendered sepolicy.rule from module/sepolicy.rule.in
 nix build .#nns-sepolicy-candidates # -> result/sepolicy-candidates.txt (review only)
 nix build .#nns-rom-sepolicy     # -> compiled ROM baseline (x86_64-linux, 3.2 GB OTA download)
-# or hack the launcher directly:
-zig build-exe src/nix-enter.zig -target aarch64-linux-musl -O small -femit-bin=bin/nix-enter
+# or build the launcher from the repository root:
+nix develop --command zig build nix-enter -Dtarget=aarch64-linux-musl -Doptimize=small
+# the launcher is in zig-out/bin/nix-enter
 # push module/* to /data/adb/modules/nix/ and re-sync the zip
 adb reboot     # only needed once, for post-fs-data store prep
 ```

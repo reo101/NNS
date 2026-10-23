@@ -151,6 +151,14 @@ print(json.dumps([account.pw_name, grp.getgrgid(os.getgid()).gr_name,
         self.assertEqual(json.loads(result.stdout), [name, name, os.getuid(), os.getgid(),
             '/tmp/caller-home', '/bin/sh', name, name])
 
+    def test_registered_account_beyond_temporary_buffer(self):
+        name = 'root' if os.getuid() == 0 else 'emacs'
+        filler = f'other:x:{os.getuid() + 1}:{os.getgid()}:other:/other:/bin/false\n' * 150
+        self.publish_account_records(filler + f'{name}:x:{os.getuid()}:{os.getgid()}:editor:/other:/bin/false\n')
+        result = self.run_code('import os,pwd; print(pwd.getpwuid(os.getuid()).pw_name)')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), name)
+
     def test_unregistered_uid_keeps_inherited_name(self):
         self.publish_account_records(
             f'other:x:{os.getuid() + 1}:{os.getgid()}:other:/other:/bin/false\n')

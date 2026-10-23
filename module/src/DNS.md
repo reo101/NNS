@@ -3,8 +3,8 @@
 Build both ARM64 artifacts with Zig 0.17:
 
 ```
-zig build -Doptimize=small -Dandroid-sysroot=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-zig build test
+zig build dns -Darch=aarch64 -Doptimize=small -Dandroid-sysroot=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+zig build test-dns
 ```
 
 The first command installs `zig-out/bin/nns-resolver` and

@@ -160,6 +160,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           nns-sepolicy = policy;
           nns-sepolicy-candidates = policyCandidates;
           nix-enter = launcher;
+          nns-native = pkgs.callPackage ./nix/native-artifacts.nix { };
           nns-dns = dns;
           emacs-integration = emacs;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
@@ -192,6 +193,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         };
         checks = {
           nns-dns = dns;
+          nns-native = import ./nix/native-tests.nix { inherit pkgs; };
           nns-module = moduleX86;
           nns-rish = import ./tests/test-rish.nix { inherit pkgs; };
           nns-system =
@@ -217,7 +219,10 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           nns-nod-consumer = import ./tests/test-nod-consumer.nix { inherit pkgs; };
           emacs-integration = emacs;
         };
-        devShells.default = pkgs.mkShell { packages = [ pkgs.android-tools pkgs.zig ]; };
+        devShells.default = pkgs.mkShell {
+          packages = [ pkgs.android-tools pkgs.zig pkgs.python3 pkgs.runit ];
+          ZIG_LOCAL_PKG_DIR = pkgs.callPackage ./nix/zig-dependencies.nix { };
+        };
         formatter = pkgs.nixfmt;
       };
   }

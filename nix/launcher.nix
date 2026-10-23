@@ -1,17 +1,34 @@
-{ lib, stdenvNoCC, zig, target ? "aarch64-linux-musl" }:
+{
+  lib,
+  stdenvNoCC,
+  zig,
+  callPackage,
+  target ? "aarch64-linux-musl",
+}:
+let
+  dependencies = callPackage ./zig-dependencies.nix { };
+in
 stdenvNoCC.mkDerivation {
   pname = "nix-enter-${target}";
   version = "3.2.0";
-  src = ../module/src/nix-enter.zig;
-  dontUnpack = true;
+  src = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../build.zig
+      ../build.zig.zon
+      ../module/src/nix-enter.zig
+    ];
+  };
+  dontConfigure = true;
   dontFixup = true;
   nativeBuildInputs = [ zig ];
   allowedReferences = [ ];
   buildPhase = ''
-    zig build-exe "$src" -target ${target} -O small -fstrip -femit-bin=nix-enter
+    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+    zig build nix-enter --system ${dependencies} -Dtarget=${target} -Doptimize=small --prefix "$PWD/result"
   '';
   installPhase = ''
-    install -Dm755 nix-enter "$out/bin/nix-enter"
+    install -Dm755 result/bin/nix-enter "$out/bin/nix-enter"
   '';
   meta = {
     mainProgram = "nix-enter";

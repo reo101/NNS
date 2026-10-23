@@ -6,6 +6,7 @@ outputs/
 
 # Zig
 .zig-cache/
+.zig-pkg/
 zig-out/
 
 # built helper binary

@@ -8,6 +8,8 @@ const max_data = 4096;
 // POSIX signal sentinels are integer values, not aligned function addresses.
 extern "c" fn signal(number: c_int, handler: usize) usize;
 const Kind = enum(u8) { data = 1, window = 2, eof = 3, _ };
+const TerminalStream = enum { stdin, stdout, stderr };
+const TerminalStreams = std.enums.EnumSet(TerminalStream);
 var termination = std.atomic.Value(c_int).init(0);
 var resized = std.atomic.Value(bool).init(false);
 
@@ -23,7 +25,7 @@ fn installSignals() void {
 }
 
 fn errno() c_int {
-    return if (builtin.abi == .android) c.__errno().* else c.__errno_location().*;
+    return if (builtin.target.abi == .android) c.__errno().* else c.__errno_location().*;
 }
 
 fn checkSignal() !void {
@@ -70,24 +72,24 @@ fn sendWindow(fd: c_int) !void {
     try sendFrame(.window, &bytes);
 }
 
-fn inputMode(mask: u3, tty_path: [*:0]const u8) !u8 {
+fn inputMode(mask: TerminalStreams, tty_path: [*:0]const u8) !u8 {
     installSignals();
     const parent = c.getppid();
     if (parent == 1 or c.prctl(c.PR_SET_PDEATHSIG, @as(c_ulong, c.SIGTERM), @as(c_ulong, 0), @as(c_ulong, 0), @as(c_ulong, 0)) < 0 or c.getppid() != parent) return error.ParentExited;
     try nonblocking(1);
-    const tty = if (mask != 0) c.open(tty_path, c.O_RDONLY | c.O_NOCTTY | c.O_CLOEXEC) else -1;
+    const tty = if (!mask.eql(.empty)) c.open(tty_path, c.O_RDONLY | c.O_NOCTTY | c.O_CLOEXEC) else -1;
     defer if (tty >= 0) {
         _ = c.close(tty);
     };
-    if (mask != 0 and tty < 0) return error.Terminal;
+    if (!mask.eql(.empty) and tty < 0) return error.Terminal;
     var original: c.struct_termios = undefined;
-    if (mask == 7) {
+    if (mask.eql(.full)) {
         if (c.tcgetattr(0, &original) < 0) return error.Terminal;
         var raw = original;
         c.cfmakeraw(&raw);
         if (c.tcsetattr(0, c.TCSANOW, &raw) < 0) return error.Terminal;
     }
-    defer if (mask == 7) {
+    defer if (mask.eql(.full)) {
         _ = c.tcsetattr(0, c.TCSANOW, &original);
     };
     if (tty >= 0) try sendWindow(tty);
@@ -217,13 +219,13 @@ fn terminateChild(child: c.pid_t) void {
     _ = reap(child, &status, 0) catch false;
 }
 
-fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
+fn hostMode(mask: TerminalStreams, argv: [*]?[*:0]const u8) !u8 {
     installSignals();
     _ = signal(c.SIGCHLD, 0);
     try nonblocking(0);
     var decoder: Decoder = .{};
     var initial_window: [8]u8 = undefined;
-    if (mask != 0) {
+    if (!mask.eql(.empty)) {
         while (true) {
             try checkSignal();
             if (try decoder.read()) |packet| {
@@ -243,7 +245,7 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
     defer if (slave >= 0) {
         _ = c.close(slave);
     };
-    if (mask != 0) {
+    if (!mask.eql(.empty)) {
         master = c.posix_openpt(c.O_RDWR | c.O_NOCTTY | c.O_CLOEXEC);
         if (master < 0 or c.grantpt(master) < 0 or c.unlockpt(master) < 0) return error.Terminal;
         var name: [256]u8 = undefined;
@@ -253,7 +255,7 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
         try applyWindow(slave, &initial_window);
     }
     var pipe: [2]c_int = .{ -1, -1 };
-    if (mask & 1 == 0 and c.pipe2(&pipe, c.O_CLOEXEC) < 0) return error.Pipe;
+    if (!mask.contains(.stdin) and c.pipe2(&pipe, c.O_CLOEXEC) < 0) return error.Pipe;
     defer for (&pipe) |*fd| {
         if (fd.* >= 0) _ = c.close(fd.*);
     };
@@ -263,15 +265,15 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
         for ([_]c_int{ c.SIGTERM, c.SIGHUP, c.SIGINT, c.SIGQUIT, c.SIGPIPE, c.SIGWINCH, c.SIGCHLD }) |number| _ = signal(number, 0);
         if (c.setsid() < 0) c._exit(127);
         if (slave >= 0 and c.ioctl(slave, c.TIOCSCTTY, @as(c_int, 0)) < 0) c._exit(127);
-        if (c.dup2(if (mask & 1 != 0) slave else pipe[0], 0) < 0) c._exit(127);
-        if (mask & 2 != 0 and c.dup2(slave, 1) < 0) c._exit(127);
-        if (mask & 4 != 0 and c.dup2(slave, 2) < 0) c._exit(127);
+        if (c.dup2(if (mask.contains(.stdin)) slave else pipe[0], 0) < 0) c._exit(127);
+        if (mask.contains(.stdout) and c.dup2(slave, 1) < 0) c._exit(127);
+        if (mask.contains(.stderr) and c.dup2(slave, 2) < 0) c._exit(127);
         if (master >= 0) _ = c.close(master);
         if (slave >= 0) _ = c.close(slave);
         for (pipe) |fd| {
             if (fd >= 0) _ = c.close(fd);
         }
-        const shell = if (builtin.abi == .android) "/system/bin/sh" else "/bin/sh";
+        const shell = if (builtin.target.abi == .android) "/system/bin/sh" else "/bin/sh";
         argv[2] = shell;
         _ = c.execv(shell, @ptrCast(argv + 2));
         c._exit(127);
@@ -288,8 +290,8 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
         _ = c.close(pipe[0]);
         pipe[0] = -1;
     }
-    const input_fd = if (mask & 1 != 0) master else pipe[1];
-    const output_fd: c_int = if (mask & 2 != 0) 1 else if (mask & 4 != 0) 2 else -1;
+    const input_fd = if (mask.contains(.stdin)) master else pipe[1];
+    const output_fd: c_int = if (mask.contains(.stdout)) 1 else if (mask.contains(.stderr)) 2 else -1;
     try nonblocking(input_fd);
     if (master >= 0) try nonblocking(master);
     if (output_fd >= 0) try nonblocking(output_fd);
@@ -329,7 +331,7 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
                 },
                 .eof => {
                     got_eof = true;
-                    if (mask & 1 != 0) {
+                    if (mask.contains(.stdin)) {
                         var attributes: c.struct_termios = undefined;
                         if (c.tcgetattr(master, &attributes) < 0) return error.Terminal;
                         input.replace(&.{attributes.c_cc[c.VEOF]});
@@ -342,7 +344,7 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
             input_closed = true;
             input.length = input.offset;
         };
-        if (got_eof and mask & 1 == 0 and input.empty() and !input_closed) {
+        if (got_eof and !mask.contains(.stdin) and input.empty() and !input_closed) {
             _ = c.close(pipe[1]);
             pipe[1] = -1;
             input_closed = true;
@@ -365,7 +367,12 @@ fn hostMode(mask: u3, argv: [*]?[*:0]const u8) !u8 {
 
 pub export fn main(argc: c_int, argv: [*]?[*:0]const u8) c_int {
     if (argc < 3) return 2;
-    const mask = std.fmt.parseInt(u3, std.mem.span(argv[2].?), 10) catch return 2;
+    const raw_mask = std.fmt.parseInt(u3, std.mem.span(argv[2].?), 10) catch return 2;
+    const mask = TerminalStreams.init(.{
+        .stdin = raw_mask & 1 != 0,
+        .stdout = raw_mask & 2 != 0,
+        .stderr = raw_mask & 4 != 0,
+    });
     const mode = std.mem.span(argv[1].?);
     const result = if (std.mem.eql(u8, mode, "--input") and argc == 4)
         inputMode(mask, argv[3].?)

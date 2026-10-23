@@ -64,16 +64,7 @@ fn enterUserns(uid: u32, gid: u32) void {
 fn mount(op: []const u8, source: ?[*:0]const u8, target: [*:0]const u8, kind: ?[*:0]const u8, flags: u32, data: usize) void {
     var m_buf: [96]u8 = undefined;
     const mop = std.mem.print(&m_buf, "mount {s}", .{op}) catch op;
-    _ = checked2(linux.mount(source, target, kind, flags, data), mop);
-}
-
-fn checked2(rc: usize, op: []const u8) usize {
-    const signed: isize = @bitCast(rc);
-    if (signed < 0 and signed >= -4095) {
-        std.debug.print("nix-enter: {s}: errno {d}\n", .{ op, -signed });
-        std.process.exit(1);
-    }
-    return rc;
+    _ = checked(linux.mount(source, target, kind, flags, data), mop);
 }
 
 fn mountPrivateVar(io: std.Io, root: []const u8) !void {
@@ -115,13 +106,16 @@ fn registeredAccount(allocator: std.mem.Allocator, uid: u32) !?struct { name: []
     if (@as(isize, @bitCast(opened)) == -2) return null; // Bootstrap without an infrastructure profile.
     const fd: i32 = @intCast(checked(opened, "open registered accounts"));
     defer _ = linux.close(fd);
+    var temporary_buffer: [4096]u8 = undefined;
+    var buffer_first: std.heap.BufferFirstAllocator = .init(&temporary_buffer, allocator);
+    const temporary_allocator = buffer_first.allocator();
     var contents = std.ArrayList(u8).empty;
-    defer contents.deinit(allocator);
+    defer contents.deinit(temporary_allocator);
     var buffer: [4096]u8 = undefined;
     while (true) {
         const count = checked(linux.read(fd, &buffer, buffer.len), "read registered accounts");
         if (count == 0) break;
-        try contents.appendSlice(allocator, buffer[0..count]);
+        try contents.appendSlice(temporary_allocator, buffer[0..count]);
     }
     var lines = std.mem.splitScalar(u8, contents.items, '\n');
     while (lines.next()) |line| {
@@ -251,7 +245,7 @@ fn profilePath(allocator: std.mem.Allocator, profile: []const u8, generation: ?[
         std.process.exit(1);
     }
     _ = linux.close(@intCast(bin_fd));
-    return allocator.printSentinel("{s}", .{resolved}, 0) catch @panic("out of memory");
+    return allocator.dupeSentinel(u8, resolved, 0) catch @panic("out of memory");
 }
 
 fn replaceEnv(allocator: std.mem.Allocator, env: *[*:null]const ?[*:0]const u8, name: []const u8, value: []const u8) void {
@@ -291,17 +285,8 @@ fn exec(allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Ma
             if (std.mem.eql(u8, token, bridge)) present = true;
         }
         if (!present) {
-            const entry = allocator.printSentinel("LD_PRELOAD={s}{s}{s}", .{ bridge, if (previous.len == 0) "" else ":", previous }, 0) catch @panic("out of memory");
-            const entries = allocator.allocSentinel(?[*:0]const u8, std.mem.len(env) + 1, null) catch @panic("out of memory");
-            var count: usize = 0;
-            for (std.mem.span(env)) |item| {
-                if (std.mem.startsWith(u8, std.mem.span(item.?), "LD_PRELOAD=")) continue;
-                entries[count] = item;
-                count += 1;
-            }
-            entries[count] = entry.ptr;
-            entries[count + 1] = null;
-            env = entries.ptr;
+            const preload = allocator.print("{s}{s}{s}", .{ bridge, if (previous.len == 0) "" else ":", previous }) catch @panic("out of memory");
+            replaceEnv(allocator, &env, "LD_PRELOAD", preload);
         }
     }
     const selected_profile = if (profile_arg) |selected|
@@ -493,4 +478,22 @@ pub fn main(init: std.process.Init) !u8 {
     const account_name = if (etcdir[0] == 0) try writeCallerAccounts(allocator, environ_map, uid, gid) else null;
     _ = checked(linux.chdir(@ptrCast(&cwd)), "restore working directory");
     exec(allocator, environ_map, environment, args[i..], store, if (profile_set) profile else null, generation, account_name);
+}
+
+test "environment replacement retains ownership and removes duplicate keys" {
+    var safe: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
+    defer std.debug.assert(safe.deinit() == 0);
+    var arena: std.heap.ArenaAllocator = .init(safe.allocator());
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const inherited = [_:null]?[*:0]const u8{ "KEEP=value", "PATH=old", "PATH=duplicate" };
+    var environment: [*:null]const ?[*:0]const u8 = &inherited;
+    replaceEnv(allocator, &environment, "PATH", "/new/bin");
+    replaceEnv(allocator, &environment, "NNS_PROFILE", "/nix/store/profile");
+    replaceEnv(allocator, &environment, "PATH", "/final/bin");
+    const entries = std.mem.span(environment);
+    try std.testing.expectEqual(3, entries.len);
+    try std.testing.expectEqualStrings("KEEP=value", std.mem.span(entries[0].?));
+    try std.testing.expectEqualStrings("NNS_PROFILE=/nix/store/profile", std.mem.span(entries[1].?));
+    try std.testing.expectEqualStrings("PATH=/final/bin", std.mem.span(entries[2].?));
 }

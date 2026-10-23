@@ -58,7 +58,7 @@ data = b"x" * 150_000
 wire = b"".join(frame(1, data[offset:offset + 4096]) for offset in range(0, len(data), 4096)) + frame(3)
 assert host("cat", wire).stdout == data
 
-for mask in (1, 2, 4, 7):
+for mask in range(1, 8):
     result = host("stty size </dev/tty; printf TTY; exit 7", mask=mask)
     assert result.returncode == 7, result
     combined = result.stdout + result.stderr
@@ -100,6 +100,10 @@ finally:
 result = subprocess.run([helper, "--input", "0", ""], input=b"bytes",
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
 assert (result.returncode, result.stdout, result.stderr) == (0, frame(1, b"bytes") + frame(3), b""), result
+for mask in ("-1", "8", "invalid"):
+    result = subprocess.run([helper, "--host", mask], input=b"",
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
+    assert result.returncode == 2, result
 for malformed in (b"\x09\0\0\0\0", frame(1, b""), struct.pack(">BI", 1, 4097), b"\x01\0", frame(2, b"bad")):
     assert host("sleep 2", malformed).returncode != 0
 

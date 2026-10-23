@@ -32,6 +32,17 @@ From `outputs.nix`: `nns-module`, `nix-enter` (+ `-host`), `nns-dns`,
 `test-userns`, `test-emacs`, `test-android`, `android-vm-test`, and matching
 `checks`. `nix flake check` exercises dns, module, emacs, repack and kernel.
 
+## Native builds
+
+`build.zig` compiles the core native artifacts and runs their tests.
+`nix build .#nns-native` builds the complete ARM64 core set. Existing per-artifact
+packages remain separate. Nix supplies pinned dependencies and the Android NDK.
+Compilation does not download packages.
+
+See [native build instructions](docs/native-build.md) for named steps,
+host tests, and direct Zig builds. APK, ROM, and kernel assembly remain in
+Nix and their platform build systems.
+
 ## Status
 
 NNS 3.2.0 and its standalone system generation run on cheetah. Root SSH and

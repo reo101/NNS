@@ -1,16 +1,26 @@
 { pkgs }:
-
-pkgs.runCommand "nns-service-control" {
-  nativeBuildInputs = [ pkgs.zig ];
-  meta.mainProgram = "nns-service-control";
-} ''
-  export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-  export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
-  mkdir -p "$out/bin"
-  zig translate-c -lc -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
-    ${./service-control.h} > service-control-c.zig
-  zig build-exe -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
-    -O safe -lc --dep c -Mroot=${./service-control.zig} \
-    -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl -Mc=service-control-c.zig \
-    -femit-bin="$out/bin/nns-service-control"
-''
+let
+  dependencies = pkgs.callPackage ../../nix/zig-dependencies.nix { };
+  source = pkgs.lib.fileset.toSource {
+    root = ../..;
+    fileset = pkgs.lib.fileset.unions [
+      ../../build.zig
+      ../../build.zig.zon
+      ./service-control.zig
+      ./service-control.h
+    ];
+  };
+in
+pkgs.runCommand "nns-service-control"
+  {
+    nativeBuildInputs = [ pkgs.zig ];
+    meta.mainProgram = "nns-service-control";
+  }
+  ''
+    cp -r ${source} source
+    chmod -R u+w source
+    cd source
+    export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+    zig build service-control --system ${dependencies} \
+      -Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl -Doptimize=safe --prefix "$out"
+  ''

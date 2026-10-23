@@ -130,7 +130,7 @@ pub export fn fstat(fd: c_int, buf: ?*anyopaque) c_int {
     // Bionic's 64-bit stat layout: uid/gid are at 24/28 on arm64 and 28/32
     // on x86_64. The session userns leaves host root unmapped, so Bionic sees
     // overflowuid and rejects its read-only property metadata and area files.
-    const uid_offset: usize = if (@import("builtin").cpu.arch == .aarch64) 24 else 28;
+    const uid_offset: usize = if (@import("builtin").target.cpu.arch == .aarch64) 24 else 28;
     const bytes: [*]u8 = @ptrCast(buf.?);
     const uid: *align(1) u32 = @ptrCast(bytes + uid_offset);
     const gid: *align(1) u32 = @ptrCast(bytes + uid_offset + 4);

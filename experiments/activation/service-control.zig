@@ -1,5 +1,7 @@
 const std = @import("std");
 const c = @import("c");
+// SIG_IGN is an integer sentinel, not an aligned function address.
+extern "c" fn signal(number: c_int, handler: usize) usize;
 
 fn fail(message: []const u8) noreturn {
     std.debug.print("nns-service-control: {s}\n", .{message});
@@ -19,7 +21,7 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(path);
 
     // FIFO commands are documented by runsv(8), not a runit library ABI.
-    _ = c.signal(c.SIGPIPE, @ptrCast(std.posix.SIG.IGN));
+    _ = signal(c.SIGPIPE, 1);
     const descriptor = c.open(path.ptr, c.O_WRONLY | c.O_NONBLOCK | c.O_NOFOLLOW | c.O_CLOEXEC);
     if (descriptor < 0) fail("cannot open supervise/control FIFO");
     defer _ = c.close(descriptor);

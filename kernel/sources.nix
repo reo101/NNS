@@ -25,7 +25,7 @@ in
   };
   sukisuManager = fetch {
     name = "SukiSU-v4.2.0.apk";
-    url = "https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases/download/v4.2.0/SukiSU_v4.2.0_40900_releases.apk";
+    url = "https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases/download/v4.2.0/SukiSU_v4.2.0_40900-release.apk";
     hash = "sha256-TKmBDmNV+/8Lvkv1zhWYCOZKQNhZh6EYlAMM2ZCmvfM=";
   };
   susfs = fetch {

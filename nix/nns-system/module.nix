@@ -112,16 +112,16 @@ let
   enabledServices = lib.filterAttrs (_: service: service.nns.enable) cfg.services.runit;
   renderService =
     name: service:
-    pkgs.writeScript "nns-service-${name}" ''
+    pkgs.writeScript "nns-service-${name}" /* bash */ ''
       #!${pkgs.runtimeShell}
       set -eu
-      ${lib.optionalString (name == "nix-daemon") "# Configuration dependency: ${etc}"}
-      ${lib.optionalString (name == "sshd") "# Configuration dependency: ${sshdConfig}"}
+      ${lib.optionalString (name == "nix-daemon") /* bash */ "# Configuration dependency: ${etc}"}
+      ${lib.optionalString (name == "sshd") /* bash */ "# Configuration dependency: ${sshdConfig}"}
       export PATH=${lib.escapeShellArg "${infrastructure}/bin:/system/bin:/system/xbin"}
       export HOME=${lib.escapeShellArg cfg.accounts.root.home}
       export TMPDIR=/data/nix/tmp
       export NIX_CONF_DIR=${lib.escapeShellArg cfg.system.nixConfDirectory}
-      ${lib.optionalString (service.nns.startAt == "unlock") ''
+      ${lib.optionalString (service.nns.startAt == "unlock") /* bash */ ''
         until [ "$(/system/bin/getprop sys.user.0.ce_available)" = true ]; do sleep 5; done
       ''}
       ${lib.concatMapStrings (dependency: ''
@@ -129,7 +129,7 @@ let
       '') service.nns.after}
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (
-          key: value: if value == null then "unset ${key}" else "export ${key}=${lib.escapeShellArg value}"
+          key: value: if value == null then /* bash */ "unset ${key}" else /* bash */ "export ${key}=${lib.escapeShellArg value}"
         ) service.process.environment
       )}
       exec ${lib.escapeShellArgs service.process.argv}
@@ -149,11 +149,14 @@ let
     ${lib.concatStringsSep "\n" (
       lib.mapAttrsToList (name: account: ''
         ${name})
-          ${pkgs.coreutils}/bin/cat ${keyFiles.${name}}
-          ${lib.concatMapStrings (file: ''
+          ${lib.getExe' pkgs.coreutils "cat"} ${keyFiles.${name}}
+          ${lib.concatMapStrings (file: /* bash */ ''
             if [ -f ${lib.escapeShellArg file} ]; then
-              ${pkgs.util-linux}/bin/setpriv --reuid ${toString account.uid} --regid ${toString account.gid} --clear-groups \
-                ${pkgs.coreutils}/bin/cat ${lib.escapeShellArg file}
+              ${lib.getExe' pkgs.util-linux "setpriv"} \
+                --reuid ${builtins.toString account.uid} \
+                --regid ${builtins.toString account.gid} \
+                --clear-groups \
+                ${lib.getExe' pkgs.coreutils "cat"} ${lib.escapeShellArg file}
             fi
           '') account.authorizedKeysFiles}
           ;;
@@ -162,8 +165,8 @@ let
       *) exit 1 ;;
     esac
   '';
-  sshdConfig = pkgs.writeText "nns-sshd-config" ''
-    Port ${toString cfg.services.openssh.port}
+  sshdConfig = pkgs.writeText "nns-sshd-config" /* sshdconfig */ ''
+    Port ${builtins.toString cfg.services.openssh.port}
     HostKey ${state}/ssh_host_ed25519_key
     PidFile ${state}/sshd.pid
     PermitRootLogin prohibit-password
@@ -185,7 +188,7 @@ let
     Subsystem sftp ${pkgs.openssh}/libexec/sftp-server
     SetEnv NIX_REMOTE=daemon NIX_CONF_DIR=${cfg.system.nixConfDirectory} PATH=${infrastructure}/bin:/system/bin:/system/xbin
     ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: account: ''
+      lib.mapAttrsToList (name: account: /* sshdconfig */ ''
         Match User ${name}
           SetEnv NIX_REMOTE=daemon NIX_CONF_DIR=${cfg.system.nixConfDirectory} PATH=/data/nix/var/nns/bin:${infrastructure}/bin:${account.home}/.nix-profile/bin:/system/bin:/system/xbin
       '') (lib.filterAttrs (name: _: name != "root" && name != "sshd") cfg.accounts)
@@ -203,7 +206,9 @@ let
     EOF
     cat > "$out/group" <<'EOF'
     ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: account: "${name}:x:${toString account.gid}:${name}") cfg.accounts
+      lib.mapAttrsToList (
+        name: account: "${name}:x:${builtins.toString account.gid}:${name}"
+      ) cfg.accounts
     )}
     nix-trusted:x:${builtins.toString nixTrustedGroupGid}:${
       lib.concatStringsSep "," (
@@ -221,7 +226,7 @@ let
           else if builtins.isList value then
             lib.concatStringsSep " " value
           else
-            toString value
+            builtins.toString value
         }"
       ) cfg.nix.settings
     )}

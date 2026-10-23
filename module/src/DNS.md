@@ -1,9 +1,9 @@
 # Android DNS bridge
 
-Build both ARM64 artifacts with Zig 0.16:
+Build both ARM64 artifacts with Zig 0.17:
 
 ```
-zig build -Doptimize=ReleaseSmall -Dandroid-sysroot=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+zig build -Doptimize=small -Dandroid-sysroot=/path/to/ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot
 zig build test
 ```
 

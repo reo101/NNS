@@ -18,6 +18,7 @@ stdenvNoCC.mkDerivation {
       ../module/src/dns-bridge.zig
       ../module/src/dns-resolver.zig
       ../integrations/shizuku/rish-terminal.zig
+      ../integrations/shizuku/rish-terminal.h
     ];
   };
   nativeBuildInputs = [ zig ];
@@ -27,7 +28,7 @@ stdenvNoCC.mkDerivation {
   allowedReferences = [ ];
   buildPhase = ''
     export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-    zig build rish-terminal -Doptimize=ReleaseSmall -Darch=${arch} \
+    zig build rish-terminal -Doptimize=small -Darch=${arch} \
       -Dandroid-sysroot=${toolchain}/toolchain/sysroot --prefix "$PWD/result"
   '';
   installPhase = ''
@@ -37,8 +38,12 @@ stdenvNoCC.mkDerivation {
     nativeBuildInputs = [ zig pkgs.python3 ];
   } ''
     export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
-    zig build-exe -lc -O Debug -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
-      ${../integrations/shizuku/rish-terminal.zig} -femit-bin=nns-rish-terminal
+    zig translate-c -lc -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
+      ${../integrations/shizuku/rish-terminal.h} > terminal-c.zig
+    zig build-exe -lc -O debug -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl \
+      --dep c -Mroot=${../integrations/shizuku/rish-terminal.zig} \
+      -target ${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl -Mc=terminal-c.zig \
+      -femit-bin=nns-rish-terminal
     python3 ${../tests/test-rish-terminal.py} "$PWD/nns-rish-terminal"
     touch "$out"
   '';

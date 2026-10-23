@@ -2,23 +2,7 @@
 // Shizuku process transport: framed input/control, unmodified output streams.
 const std = @import("std");
 const builtin = @import("builtin");
-const c = @cImport({
-    @cDefine("_GNU_SOURCE", "1");
-    @cDefine("BIONIC_IOCTL_NO_SIGNEDNESS_OVERLOAD", "1");
-    @cDefine("_Nonnull", "");
-    @cDefine("_Nullable", "");
-    @cInclude("errno.h");
-    @cInclude("fcntl.h");
-    @cInclude("poll.h");
-    @cInclude("signal.h");
-    @cInclude("stdlib.h");
-    @cInclude("sys/ioctl.h");
-    @cInclude("sys/prctl.h");
-    @cInclude("sys/wait.h");
-    @cInclude("termios.h");
-    @cInclude("time.h");
-    @cInclude("unistd.h");
-});
+const c = @import("c");
 
 const max_data = 4096;
 // POSIX signal sentinels are integer values, not aligned function addresses.
@@ -69,7 +53,7 @@ fn writeAll(fd: c_int, bytes: []const u8) !void {
 
 fn sendFrame(kind: Kind, payload: []const u8) !void {
     var header: [5]u8 = undefined;
-    header[0] = @intFromEnum(kind);
+    header[0] = @backingInt(kind);
     std.mem.writeInt(u32, header[1..5], @intCast(payload.len), .big);
     try writeAll(1, &header);
     try writeAll(1, payload);
@@ -158,7 +142,7 @@ const Decoder = struct {
             if (reading_header) {
                 self.header_used += @intCast(count);
                 if (self.header_used == 5) {
-                    self.kind = @enumFromInt(self.header[0]);
+                    self.kind = @fromBackingInt(@intCast(self.header[0]));
                     self.length = std.mem.readInt(u32, self.header[1..5], .big);
                     switch (self.kind) {
                         .data => if (self.length == 0 or self.length > max_data) return error.Protocol,

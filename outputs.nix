@@ -12,6 +12,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
     # with the NNS launcher; pass it into `lib.nixOnDroidConfiguration`.
     flake.nixOnDroidModules.nns = import ./nix/nix-on-droid.nix;
     flake.lib.nnsSystem = import ./nix/nns-system.nix { nixpkgs = inputs.nixpkgs; };
+    flake.lib.evalPortableServices = import ./nix/service-backends;
     flake.nnsModules.default = import ./nix/nns-system/module.nix;
     # Data shared with consumers: the accepted binary caches, rendered into
     # the NixOS substituters module and the phone's staged nix.conf alike.
@@ -129,12 +130,14 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
             exec python3 ${./tests/test-nns-services.py} ${lib.getExe hostLauncher} ${serviceTestFixture}
           '';
         };
+        serviceManagerTests = import ./tests/nns-service-managers { inherit pkgs; };
         systemTestSource = lib.fileset.toSource {
           root = ./.;
           fileset = lib.fileset.unions [
             ./tests/test-nns-activation.py
             ./tests/test-nns-boot.py
             ./nix/nns-system/activate.sh
+            ./nix/nns-system/service-runtime.sh
             ./module/system-generation.sh
             ./module/stage-android-runtime.sh
           ];
@@ -165,6 +168,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           test-emacs = emacsTest;
           test-nns-activation = activationTest;
           test-nns-services = serviceTests;
+          test-nns-service-managers = serviceManagerTests.tests;
           test-nns-boot = bootTest;
         } // lib.optionalAttrs (system == "x86_64-linux") {
           kernel-android-test = androidTestKernel;
@@ -201,6 +205,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
               accounts.root.openssh.authorizedKeys.keys = [ "ssh-ed25519 AAAATEST evaluation-only" ];
             }];
           }).config.system.build.toplevel;
+          nns-service-managers = serviceManagerTests.evaluation;
           nns-reconfiguration = import ./tests/test-nns-reconfiguration.nix { inherit pkgs; };
           nns-nix-versions = import ./tests/test-nns-nix-versions.nix { inherit pkgs; };
           avf-client-timeout = pkgs.runCommand "check-avf-client-timeout" {

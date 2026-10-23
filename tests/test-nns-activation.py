@@ -8,7 +8,7 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / 'nix/nns-system/activate.sh'
 REQUIRED_TOOLS = ('nix', 'nix-env', 'sleep', 'runsvdir', 'sv', 'flock', 'install', 'mv', 'mkdir', 'id',
                   'cp', 'chmod', 'chown', 'stat', 'readlink', 'ln', 'rm', 'find', 'grep',
-                  'cut', 'cat', 'nohup', 'mktemp')
+                  'cut', 'cat', 'nohup', 'mktemp', 'sh', 'env', 'tr', 'rmdir')
 
 
 class ActivationTest(unittest.TestCase):

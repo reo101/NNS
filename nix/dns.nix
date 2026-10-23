@@ -9,6 +9,7 @@ stdenvNoCC.mkDerivation {
       ../module/src/dns-wire.zig
       ../module/src/dns-bridge.zig
       ../module/src/dns-resolver.zig
+      ../module/src/dns-resolver.h
       ../tests/test-dns.py
     ];
   };
@@ -18,7 +19,7 @@ stdenvNoCC.mkDerivation {
   allowedReferences = [ ];
   dontSetZigDefaultFlags = true; # The hook's host CPU and optimization flags do not apply.
   zigBuildFlags = [
-    "-Doptimize=ReleaseSmall"
+    "-Doptimize=small"
     "-Darch=${arch}"
     "-Dandroid-sysroot=${androidToolchain}/toolchain/sysroot"
   ];

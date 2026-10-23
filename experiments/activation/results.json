@@ -1,0 +1,69 @@
+{
+  "command": "nix run --impure --file experiments/activation/default.nix tests -L",
+  "platform": "x86_64-linux",
+  "versions": {
+    "babashka": "1.13.220",
+    "nushell": "0.115.1",
+    "runit": "2.3.1",
+    "s6": "2.15.1.0",
+    "s6-rc": "0.7.0.0",
+    "zig": "0.16.0"
+  },
+  "result": "passed",
+  "activation_cases": {
+    "per_implementation": 28,
+    "implementations": [
+      "shell",
+      "nushell",
+      "babashka"
+    ],
+    "total": 84
+  },
+  "real_runit_lifecycle_runs": 3,
+  "native_control_cases": 9,
+  "s6_rc_cases": 3,
+  "device_access": false,
+  "deployed": false,
+  "committed": false,
+  "intentional_baseline_difference": "A failing find is hidden by the shell pipeline; both alternatives report it before profile publication.",
+  "source_hashes": [
+    {
+      "path": "nix/nns-system/activate.sh",
+      "sha256": "40a25f533659af46490fc1ec2186d815d010d2c960b74643c3a53f0fe7bd4cb2"
+    },
+    {
+      "path": "experiments/activation/activate.nu",
+      "sha256": "87b4136a02c5683ab4b0e25141cfd25fac44153a549bba50c7b321ca80a30f9d"
+    },
+    {
+      "path": "experiments/activation/activate.clj",
+      "sha256": "fb7efad6d81d429c80e37d91a18fa97f1ba0b5f1b6bddb974b7ee1b4d284399d"
+    },
+    {
+      "path": "experiments/activation/process-boundary.sh",
+      "sha256": "c4c4cbba9f5ce7fd8460bb933a1f04d5395dd921cfcd789cc551bffdf2b1a249"
+    },
+    {
+      "path": "experiments/activation/service-control.zig",
+      "sha256": "bbdecf1e669bd15238a35554ad1c0e4c970adf568120130791dcf044153bd24b"
+    },
+    {
+      "path": "experiments/activation/test-activation.py",
+      "sha256": "289645dff61d98308be8537e10eee4ab74c6bae43fc98dd6045a6ae571ada7f4"
+    },
+    {
+      "path": "experiments/activation/test-service-control.py",
+      "sha256": "6483d34e5d291bc814955c50732551f3a10b3f9ceddca60def8bfb137877839d"
+    },
+    {
+      "path": "experiments/activation/test-s6-rc.py",
+      "sha256": "c4036e02b3037943a960daf73037476dcee58b2486eb9ea3e5284cdec854be05"
+    },
+    {
+      "path": "experiments/activation/default.nix",
+      "sha256": "ab0f70cdddf4d599fe1c299a6722b35d6f1e9eb4beb2b627e4792543e3c39382"
+    }
+  ],
+  "lifecycle_pid_namespace": true,
+  "test_descendants_remaining": 0
+}

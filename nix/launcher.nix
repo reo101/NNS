@@ -8,7 +8,7 @@ stdenvNoCC.mkDerivation {
   nativeBuildInputs = [ zig ];
   allowedReferences = [ ];
   buildPhase = ''
-    zig build-exe "$src" -target ${target} -O ReleaseSmall -fstrip -femit-bin=nix-enter
+    zig build-exe "$src" -target ${target} -O small -fstrip -femit-bin=nix-enter
   '';
   installPhase = ''
     install -Dm755 nix-enter "$out/bin/nix-enter"

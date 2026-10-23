@@ -100,7 +100,7 @@ pub export fn ttyname(fd: c_int) ?[*:0]u8 {
         return null;
     }
     var fd_path: [32]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&fd_path, "/proc/self/fd/{d}", .{fd}) catch return null;
+    const path = std.mem.printSentinel(&fd_path, "/proc/self/fd/{d}", .{fd}, 0) catch return null;
     const length = readlink(path.ptr, &tty_name_buffer, tty_name_buffer.len - 1);
     if (length <= 0 or !std.mem.startsWith(u8, tty_name_buffer[0..@intCast(length)], "/dev/pts/")) {
         ep.* = original_error;
@@ -118,7 +118,7 @@ pub export fn fstat(fd: c_int, buf: ?*anyopaque) c_int {
         dlsym(next, "gnu_get_libc_version") != null) return rc;
 
     var proc_path: [32]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&proc_path, "/proc/self/fd/{d}", .{fd}) catch return rc;
+    const path = std.mem.printSentinel(&proc_path, "/proc/self/fd/{d}", .{fd}, 0) catch return rc;
     var target: [64]u8 = undefined;
     const n = readlink(path.ptr, &target, target.len);
     if (n <= 0) return rc;
@@ -224,7 +224,7 @@ fn resolve(node: ?[*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInf
     var argv: [10:null]?[*:0]const u8 = @splat(null);
     argv[0] = helper;
     for ([_]i32{ flags, h.family, h.socktype, h.protocol }, 0..) |value, i|
-        argv[i + 1] = (try std.fmt.bufPrintZ(&text[i], "{d}", .{value})).ptr;
+        argv[i + 1] = (try std.mem.printSentinel(&text[i], "{d}", .{value}, 0)).ptr;
     argv[5] = if (node != null) "1" else "0";
     argv[6] = node orelse "";
     argv[7] = if (service != null) "1" else "0";

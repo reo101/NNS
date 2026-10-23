@@ -20,12 +20,12 @@ pub fn build(b: *std.Build) void {
             \\include_dir={s}/usr/include
             \\sys_include_dir={s}/usr/include/{s}
             \\crt_dir={s}
-            \\static_crt_dir=
-            \\gcc_dir=
+            \\cc_dir={s}
             \\msvc_lib_dir=
             \\kernel32_lib_dir=
+            \\darwin_sdk_dir=
             \\
-        , .{ root, root, triple, libdir }));
+        , .{ root, root, triple, libdir, libdir }));
         const resolver = b.addExecutable(.{
             .name = "nns-resolver",
             .linkage = .dynamic,
@@ -53,6 +53,19 @@ pub fn build(b: *std.Build) void {
         });
         terminal.setLibCFile(libc_file);
         terminal.root_module.addLibraryPath(.{ .cwd_relative = libdir });
+        inline for (.{
+            .{ resolver.root_module, "module/src/dns-resolver.h" },
+            .{ terminal.root_module, "integrations/shizuku/rish-terminal.h" },
+        }) |binding| {
+            const translation = b.addTranslateC(.{
+                .root_source_file = b.path(binding[1]),
+                .target = android,
+                .optimize = optimize,
+            });
+            translation.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/{s}", .{ root, triple }) });
+            translation.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{root}) });
+            binding[0].addImport("c", translation.createModule());
+        }
         const terminal_step = b.step("rish-terminal", "Build the Android terminal supervisor");
         terminal_step.dependOn(&b.addInstallArtifact(terminal, .{}).step);
     } else {
@@ -63,17 +76,17 @@ pub fn build(b: *std.Build) void {
     const unit = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("module/src/dns-wire.zig"),
         .target = b.graph.host,
-        .optimize = .Debug,
+        .optimize = .debug,
     }) });
     tests.dependOn(&b.addRunArtifact(unit).step);
-    const host_bridge = addBridge(b, "nns-dns-host", b.graph.host, .Debug);
+    const host_bridge = addBridge(b, "nns-dns-host", b.graph.host, .debug);
     const integration = b.addSystemCommand(&.{"python3"});
     integration.addFileArg(b.path("tests/test-dns.py"));
     integration.addArtifactArg(host_bridge);
     tests.dependOn(&integration.step);
 }
 
-fn addBridge(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
+fn addBridge(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Step.Compile {
     const library = b.addLibrary(.{
         .name = name,
         .linkage = .dynamic,
@@ -81,7 +94,7 @@ fn addBridge(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, 
             .root_source_file = b.path("module/src/dns-bridge.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = optimize != .Debug,
+            .strip = optimize != .debug,
         }),
     });
     // Resolve the small shared C ABI from the loading process. Linking glibc

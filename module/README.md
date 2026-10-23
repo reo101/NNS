@@ -55,7 +55,7 @@ boot.
 - SukiSU's KPM/eBPF kernel hooks are unavailable on this kernel build
   (`ksud kpm` → ENOTTY), so no kernel-level trickery without a reflash.
 
-## Mechanism (`bin/nix-enter`, zig 0.16, no libc, static aarch64)
+## Mechanism (`bin/nix-enter`, Zig 0.17, no libc, static aarch64)
 
 1. `unshare(CLONE_NEWNS)`, `mount --make-rprivate /`.
 2. tmpfs new root at `/tmp/nixroot.<pid>`; `mount --move` every top-level
@@ -183,7 +183,7 @@ nix build .#nns-sepolicy         # -> rendered sepolicy.rule from module/sepolic
 nix build .#nns-sepolicy-candidates # -> result/sepolicy-candidates.txt (review only)
 nix build .#nns-rom-sepolicy     # -> compiled ROM baseline (x86_64-linux, 3.2 GB OTA download)
 # or hack the launcher directly:
-zig build-exe src/nix-enter.zig -target aarch64-linux-musl -O ReleaseSmall -femit-bin=bin/nix-enter
+zig build-exe src/nix-enter.zig -target aarch64-linux-musl -O small -femit-bin=bin/nix-enter
 # push module/* to /data/adb/modules/nix/ and re-sync the zip
 adb reboot     # only needed once, for post-fs-data store prep
 ```

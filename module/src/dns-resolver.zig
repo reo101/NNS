@@ -2,12 +2,7 @@
 // getaddrinfo then uses Android's resolver under the caller's unchanged UID.
 const std = @import("std");
 const wire = @import("dns-wire.zig");
-const c = @cImport({
-    @cDefine("_Nonnull", "");
-    @cDefine("_Nullable", "");
-    @cInclude("netdb.h");
-    @cInclude("errno.h");
-});
+const c = @import("c");
 
 pub export fn main(argc: c_int, argv: [*]const [*:0]const u8) c_int {
     resolve(argc, argv) catch return 1;

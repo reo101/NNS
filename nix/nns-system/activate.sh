@@ -15,7 +15,7 @@ nix_conf=${NNS_NIX_CONF_DIRECTORY:-/data/nix/etc/nix}
 launcher=${NNS_LAUNCHER:-/data/nix/bin/nix-enter}
 # The entry point supplies this immutable PATH, never an application profile.
 export PATH="$sp/bin:/system/bin:/system/xbin"
-for tool in nix nix-env sleep runsvdir sv flock install mv mkdir mktemp cp chmod chown stat readlink ln rm find grep cut cat nohup; do
+for tool in sh env tr rmdir nix nix-env sleep runsvdir sv flock install mv mkdir mktemp cp chmod chown stat readlink ln rm find grep cut cat nohup; do
     command -v "$tool" >/dev/null 2>&1 || fail "missing system tool: $tool"
 done
 valid_name() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9_-]*) return 1;; *) return 0;; esac;; *) return 1;; esac; }
@@ -33,7 +33,7 @@ for directory in "$state" "${state%/*}" "$etc_root" "${etc_root%/*}" "$profiles"
     check_directory "$directory"
 done
 check_directory "$generation"
-for directory in "$state/services" "$state/authorized_keys" "$state/services"/*; do
+for directory in "$state/services" "$state/bin" "$state/authorized_keys" "$state/services"/*; do
     if [ -e "$directory" ] || [ -L "$directory" ]; then check_directory "$directory"; fi
 done
 for file in passwd group nix/nix.conf; do [ -f "$generation/etc/$file" ] || fail "missing etc/$file"; done
@@ -70,6 +70,7 @@ mkdir -p "${state%/*}"
 [ ! -L "$state.lock" ] || fail 'activation lock is a symlink'
 exec 9>"$state.lock"
 flock 9
+export NNS_SERVICE_LOCKED=1
 mkdir -p "$state" "$etc_root" "$profiles" "$nix_conf" "$state/services" "$state/authorized_keys" "$root_home"
 # Refuse legacy app-owned service trees rather than following their links as root.
 for directory in "$state/services" "$state/authorized_keys" "$etc_root/nix" "$etc_root/ssl" "$etc_root/ssl/certs"; do check_directory "$directory"; done
@@ -85,6 +86,14 @@ if [ -f "$generation/sshd-enabled" ]; then
     # The launcher supplies private /var/empty without changing the host.
     "$generation/check-sshd" "$generation/etc" "$generation/sshd_config"
 fi
+
+service_control() {
+    if [ -x "$generation/service-control" ]; then "$generation/service-control" "$1";
+    else sh "${NNS_SERVICE_RUNTIME:-${0%/*}/service-runtime.sh}" "$generation" "$1"; fi
+}
+# Validate the selected backend, migration protocol and candidate database before
+# publishing configuration or profiles. This does not stop the current manager.
+service_control preflight
 
 # Keep the staged etc directory inode, including its live bind mounts.
 # Copy the small generated tree; do not replace Android /etc or delete unknown files.
@@ -138,85 +147,8 @@ if [ -f "$generation/sshd-enabled" ]; then
     install -m 600 "$generation/sshd_config" "$state/.sshd_config.$$"
     mv -Tf "$state/.sshd_config.$$" "$state/sshd_config"
 fi
-for directory in "$state/services"/*; do
-    [ -e "$directory" ] || continue
-    check_directory "$directory"
-    if [ ! -d "$generation/services/${directory##*/}" ]; then
-        if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-            sv -w 10 down "$directory"; sv -w 10 exit "$directory"
-        fi
-        rm -rf -- "$directory"
-    fi
-done
-# Stop and invalidate all finite jobs before publishing any new service.
-# A dependent process must not observe completion from a prior activation.
-for entry in "$generation/services"/*; do
-    [ -e "$entry" ] || continue
-    directory=$state/services/${entry##*/}
-    if [ -f "$entry/oneshot" ] || [ -f "$directory/oneshot" ]; then
-        if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-            sv -w 10 down "$directory"
-        fi
-        rm -f "$directory/completed" "$directory/exit-status"
-    fi
-done
-for entry in "$generation/services"/*; do
-    [ -e "$entry" ] || continue
-    directory=$state/services/${entry##*/}
-    check_directory "$directory"
-    previous=$(readlink "$directory/run" 2>/dev/null || :)
-    target=$(readlink -f "$entry/run")
-    previous_oneshot=false
-    if [ -f "$directory/oneshot" ]; then previous_oneshot=true; fi
-    # Prepare new directories outside runsvdir's watched tree.
-    destination=$directory
-    if [ ! -d "$directory" ]; then destination=$(mktemp -d "$state/.service.${entry##*/}.XXXXXXXX"); fi
-    chmod 700 "$destination"
-    ln -s "$target" "$destination/.run.$$"
-    mv -Tf "$destination/.run.$$" "$destination/run"
-    if [ -f "$entry/oneshot" ]; then
-        : > "$destination/oneshot"
-        : > "$destination/down"
-        ln -s "$(readlink -f "$entry/finish")" "$destination/.finish.$$"
-        mv -Tf "$destination/.finish.$$" "$destination/finish"
-    else
-        rm -f "$destination/oneshot" "$destination/finish"
-        if [ "$previous_oneshot" = true ]; then rm -f "$destination/down"; fi
-    fi
-    if [ "$destination" != "$directory" ]; then mv -T "$destination" "$directory"; fi
-    if [ ! -f "$entry/oneshot" ] && { [ "$previous" != "$target" ] || [ "$previous_oneshot" = true ]; } && [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-        sv -w 10 restart "$directory"
-    fi
-done
-
 # The nns-system profile belongs to deploy-rs, not this activation script.
-supervisor_running=false
-if [ -f "$state/supervisor.pid" ]; then
-    pid=$(cat "$state/supervisor.pid")
-    case $pid in ''|0|*[!0-9]*) ;; *)
-        if kill -0 "$pid" 2>/dev/null && [ -r "/proc/$pid/cmdline" ] && grep -aq 'runsvdir' "/proc/$pid/cmdline"; then supervisor_running=true; fi;;
-    esac
-fi
-if [ "$supervisor_running" = false ]; then
-    [ -x "$launcher" ] || fail 'namespace launcher unavailable'
-    # Do not let the supervisor inherit the activation lock or SSH descriptors.
-    nohup "$launcher" --etc "$etc_root" -- "$sp/bin/runsvdir" "$state/services" \
-        9>&- </dev/null >>"$state/supervisor.log" 2>&1 &
-    echo $! > "$state/supervisor.pid"
-fi
-# "up" is deliberately non-waiting. A successful oneshot can finish before
-# sv's process-running check; its completed marker is the readiness contract.
-for entry in "$generation/services"/*; do
-    [ -f "$entry/oneshot" ] || continue
-    directory=$state/services/${entry##*/}
-    attempts=0
-    until sv status "$directory" >/dev/null 2>&1; do
-        attempts=$((attempts + 1))
-        [ "$attempts" -lt 10 ] || fail "oneshot is not supervised: ${entry##*/}"
-        sleep 1
-    done
-    sv up "$directory"
-done
+service_control activate
 if [ -d "$generation/services/nix-daemon" ]; then
     attempts=0
     until NIX_REMOTE=daemon "$sp/bin/nix" --extra-experimental-features nix-command store ping --store daemon >/dev/null 2>&1; do

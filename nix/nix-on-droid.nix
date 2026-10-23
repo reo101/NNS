@@ -178,8 +178,9 @@ let
     }}"
     else "";
 
-  # The terminal UI resolves these outside the namespace and ignores store
-  # symlinks. Copy each file into app storage and link to that local copy.
+  # The terminal UI cannot read store paths outside the namespace. Font and
+  # color loaders follow app-local symlinks; the properties loader rejects all
+  # symlinks and requires a regular file.
   managedTermuxFile = { option, name, source }:
     let
       dir = "${config.user.home}/.termux";
@@ -187,7 +188,20 @@ let
       target = "${dir}/${name}";
     in
     if source != null then {
-      "link${option}" = /* bash */ ''
+      "link${option}" = if name == "termux.properties" then /* bash */ ''
+        $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${dir}"
+        if [ -e "${target}" ] && ! [ -L "${target}" ] && ! [ -L "${stored}" ]; then
+          $DRY_RUN_CMD mv $VERBOSE_ARG "${target}" "${target}.bak"
+        fi
+        if [ "$(readlink "${stored}")" != "${source}" ]; then
+          $DRY_RUN_CMD ln $VERBOSE_ARG -sfn "${source}" "${stored}"
+        fi
+        if [ -L "${target}" ] || ! cmp -s "${stored}" "${target}"; then
+          $DRY_RUN_CMD cp $VERBOSE_ARG --remove-destination "${stored}" "${target}.tmp"
+          $DRY_RUN_CMD chmod $VERBOSE_ARG 444 "${target}.tmp"
+          $DRY_RUN_CMD mv $VERBOSE_ARG -Tf "${target}.tmp" "${target}"
+        fi
+      '' else /* bash */ ''
         $DRY_RUN_CMD mkdir $VERBOSE_ARG -p "${dir}"
         if [ -e "${target}" ] && ! [ -L "${target}" ]; then
           $DRY_RUN_CMD mv $VERBOSE_ARG "${target}" "${target}.bak"
@@ -205,6 +219,14 @@ let
       '';
     } else {
       "unlink${option}" = /* bash */ ''
+        ${lib.optionalString (name == "termux.properties") ''
+          if [ -L "${stored}" ] && ! [ -L "${target}" ]; then
+            if cmp -s "${stored}" "${target}"; then
+              $DRY_RUN_CMD rm $VERBOSE_ARG -f "${target}"
+            fi
+            $DRY_RUN_CMD rm $VERBOSE_ARG -f "${stored}"
+          fi
+        ''}
         if [ -L "${target}" ]; then
           if [ "$(readlink "${target}")" = "${stored}" ]; then
             $DRY_RUN_CMD rm $VERBOSE_ARG -f "${stored}"

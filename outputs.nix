@@ -209,9 +209,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
             python3 ${./tests/test-avf-timeout.py} ${./integrations/avf/VirtualMachineClient.kt}
             touch "$out"
           '';
-          nns-nod-consumer =
-            assert import ./tests/test-nod-consumer.nix { inherit pkgs; };
-            pkgs.runCommand "check-nns-nod-consumer" { } "touch $out";
+          nns-nod-consumer = import ./tests/test-nod-consumer.nix { inherit pkgs; };
           emacs-integration = emacs;
         };
         devShells.default = pkgs.mkShell { packages = [ pkgs.android-tools pkgs.zig ]; };

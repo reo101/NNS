@@ -48,6 +48,17 @@ let
     };
   }];
   disabled = evaluate [{ nns.enable = lib.mkForce false; }];
+  changedProperties = evaluate [{ terminal.properties.fullscreen = lib.mkForce "true"; }];
+  removedProperties = evaluate [{ terminal.properties = lib.mkForce { }; }];
+  terminalActivation = name: script: pkgs.writeShellScript name (''
+    set -eu
+  '' + lib.replaceStrings [ consumer.config.user.home ] [ "$HOME" ] script);
+  propertiesActivation = terminalActivation "nns-test-terminal-properties"
+    consumer.config.build.activation.linkProperties;
+  changedPropertiesActivation = terminalActivation "nns-test-terminal-properties-changed"
+    changedProperties.config.build.activation.linkProperties;
+  removedPropertiesActivation = terminalActivation "nns-test-terminal-properties-removed"
+    removedProperties.config.build.activation.unlinkProperties;
   command = lib.findFirst (package: package.name == "nns-nix-on-droid") null consumer.config.environment.packages;
   rejects = definition: !(builtins.tryEval (builtins.deepSeq (lib.evalModules {
     class = "nixOnDroid";
@@ -81,4 +92,57 @@ assert !(rejects { });
 assert rejects { nns.systemManaged = true; };
 assert rejects { nns.services.enable = true; };
 assert rejects { nns.nix.settings.max-jobs = 1; };
-true
+pkgs.runCommand "check-nns-nod-consumer" {
+  nativeBuildInputs = [ pkgs.bash pkgs.coreutils ];
+} ''
+  export HOME="$TMPDIR/home" DRY_RUN_CMD= VERBOSE_ARG=
+  mkdir -p "$HOME/.termux"
+  target="$HOME/.termux/termux.properties"
+  stored="$HOME/.termux/nns-termux.properties"
+
+  # Back up an existing unmanaged file, then publish the requested layout.
+  printf 'unmanaged=true\n' > "$target"
+  bash ${propertiesActivation}
+  test -L "$stored"
+  test -f "$target" && test ! -L "$target"
+  cmp "$stored" "$target"
+  grep -qx 'unmanaged=true' "$target.bak"
+  source=$(readlink "$stored")
+  source_digest=$(sha256sum "$source")
+  test "$(stat -c %a "$target")" = 444
+
+  # Migrate the previous app-local copy and symlink, even with equal contents.
+  rm "$stored"
+  cp "$target" "$stored"
+  rm "$target"
+  ln -s "$stored" "$target"
+  bash ${propertiesActivation}
+  test -L "$stored"
+  test -f "$target" && test ! -L "$target"
+  cmp "$stored" "$target"
+  test "$(sha256sum "$source")" = "$source_digest"
+
+  # Reapplication preserves the copy; dry activation changes neither file.
+  inode=$(stat -c %i "$target")
+  bash ${propertiesActivation}
+  test "$(stat -c %i "$target")" = "$inode"
+  DRY_RUN_CMD=echo bash ${changedPropertiesActivation}
+  test "$(readlink "$stored")" = "$source"
+  grep -qx 'fullscreen=false' "$target"
+
+  # Replace a stale temporary symlink without writing through to the store.
+  ln -s "$source" "$target.tmp"
+  bash ${changedPropertiesActivation}
+  test "$(readlink "$stored")" != "$source"
+  test ! -L "$target"
+  grep -qx 'fullscreen=true' "$target"
+  test "$(stat -c %a "$target")" = 444
+  test "$(sha256sum "$source")" = "$source_digest"
+  test ! -e "$target.tmp" && test ! -L "$target.tmp"
+
+  bash ${removedPropertiesActivation}
+  test ! -e "$target" && test ! -L "$target"
+  test ! -e "$stored" && test ! -L "$stored"
+  grep -qx 'unmanaged=true' "$target.bak"
+  touch "$out"
+''

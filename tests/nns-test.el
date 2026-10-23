@@ -98,12 +98,30 @@
 (ert-deftest nns-eshell-path-prepends-profile ()
   (nns-test--configured
    (should (equal (nns--eshell-get-path (lambda (&rest _) '("/data/bin")))
-                  '("/data/nix/var/nns/bin" "/nix/profile/bin" "/data/bin")))
-   (should (equal (nns--eshell-get-path (lambda (&rest _) '("/nix/profile/bin")))
-                  '("/data/nix/var/nns/bin" "/nix/profile/bin")))
+                  '("/data/nix/var/nns/bin" "/nix/profile/bin"
+                    "/nix/var/nix/profiles/system-profile/bin" "/data/bin")))
+   (let ((path (list "/nix/profile/bin" "/data/bin"
+                     "/nix/var/nix/profiles/system-profile/bin" "/data/bin")))
+     (should (equal (nns--eshell-get-path (lambda (&rest _) path))
+                    '("/data/nix/var/nns/bin" "/nix/profile/bin"
+                      "/nix/var/nix/profiles/system-profile/bin" "/data/bin")))
+     (should (equal path '("/nix/profile/bin" "/data/bin"
+                          "/nix/var/nix/profiles/system-profile/bin" "/data/bin"))))
    (let ((nns-mode nil))
      (should (equal (nns--eshell-get-path (lambda (&rest _) '("/data/bin")))
                     '("/data/bin"))))))
+
+(ert-deftest nns-ghostel-native-spawn-preserves-command-and-environment ()
+  (nns-test--configured
+   (let ((command '("bash" "-c" "printf '%s' '$value with spaces'")))
+     (should (equal (nns--ghostel-spawn-via-native #'identity command)
+                    (nns--command command)))
+     (let ((default-directory "/ssh:example:/tmp/"))
+       (should (eq (nns--ghostel-spawn-via-native #'identity command) command)))
+     (let ((nns-mode nil))
+       (should (eq (nns--ghostel-spawn-via-native #'identity command) command)))
+     (let ((nns--inhibit t))
+       (should (eq (nns--ghostel-spawn-via-native #'identity command) command))))))
 
 (ert-deftest nns-profile-selection-resolves-once-in-originating-buffer ()
   (nns-test--configured
@@ -172,10 +190,18 @@
 
 (ert-deftest nns-mode-can-be-disabled-cleanly ()
   (cl-letf (((symbol-function 'nns-check) (lambda () "OK")))
-    (unwind-protect
-        (progn
-          (nns-mode 1)
-          (should (advice-member-p #'nns--make-process 'make-process))
-          (nns-mode -1)
-          (should-not (advice-member-p #'nns--make-process 'make-process)))
-      (nns-mode -1))))
+    (let ((fixture (make-temp-file
+                    "nns-ghostel-" nil ".el"
+                    ";;; -*- lexical-binding: t; -*-\n(defun ghostel--spawn-via-native (command) command)\n(provide 'ghostel)\n")))
+      (unwind-protect
+          (progn
+            (nns-mode 1)
+            (load fixture nil t)
+            (should (advice-member-p #'nns--make-process 'make-process))
+            (should (advice-member-p #'nns--ghostel-spawn-via-native 'ghostel--spawn-via-native))
+            (nns-mode -1)
+            (should-not (advice-member-p #'nns--make-process 'make-process))
+            (should-not (advice-member-p #'nns--ghostel-spawn-via-native 'ghostel--spawn-via-native)))
+        (nns-mode -1)
+        (when (featurep 'ghostel) (unload-feature 'ghostel t))
+        (delete-file fixture)))))

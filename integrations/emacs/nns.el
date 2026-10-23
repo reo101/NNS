@@ -170,14 +170,27 @@ The selected target is resolved once per buffer, not on every subprocess."
                   (not (file-remote-p default-directory)) path))
         path
       (let ((bin (concat (directory-file-name (nns--resolved-profile)) "/bin")))
-        (cons "/data/nix/var/nns/bin"
-              (cons bin (remove "/data/nix/var/nns/bin" (remove bin path))))))))
+        (delete-dups
+         (append (list "/data/nix/var/nns/bin" bin
+                       "/nix/var/nix/profiles/system-profile/bin")
+                 (copy-sequence path)))))))
 
 (defun nns--eshell-advice (enable)
   (with-eval-after-load 'esh-util
     (if enable
         (advice-add 'eshell-get-path :around #'nns--eshell-get-path)
       (advice-remove 'eshell-get-path #'nns--eshell-get-path))))
+
+(defun nns--ghostel-spawn-via-native (function command)
+  (if (nns--wrap-p (car command))
+      (nns--invoke function (nns--command command))
+    (funcall function command)))
+
+(defun nns--ghostel-advice (enable)
+  (with-eval-after-load 'ghostel
+    (if enable
+        (advice-add 'ghostel--spawn-via-native :around #'nns--ghostel-spawn-via-native)
+      (advice-remove 'ghostel--spawn-via-native #'nns--ghostel-spawn-via-native))))
 
 ;;;###autoload
 (defun nns-select-profile (profile &optional generation)
@@ -236,7 +249,8 @@ Remote/TRAMP processes are left alone.  Disable to run outside NNS."
     (if nns-mode
         (advice-add (car pair) :around (cdr pair))
       (advice-remove (car pair) (cdr pair))))
-  (nns--eshell-advice nns-mode))
+  (nns--eshell-advice nns-mode)
+  (nns--ghostel-advice nns-mode))
 
 ;;;###autoload
 (defun nns-shell ()

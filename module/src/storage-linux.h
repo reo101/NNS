@@ -1,4 +1,6 @@
 #include <linux/btrfs.h>
+#include <linux/capability.h>
+#include <linux/prctl.h>
 #include <linux/errno.h>
 #include <linux/fscrypt.h>
 #include <linux/loop.h>

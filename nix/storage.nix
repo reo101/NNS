@@ -22,6 +22,9 @@ stdenvNoCC.mkDerivation {
       ../build.zig.zon
       ../module/src/nns-storage.zig
       ../module/src/storage-linux.h
+      ../integrations/module/storage/supervisor.zig
+      ../integrations/module/storage/controller.zig
+      ../tests/module-storage/handoff.zig
     ];
   };
   dontConfigure = true;
@@ -35,6 +38,8 @@ stdenvNoCC.mkDerivation {
   '';
   installPhase = ''
     install -Dm755 result/bin/nns-storage "$out/bin/nns-storage"
+    install -Dm755 result/bin/nns-storage-supervisor "$out/bin/nns-storage-supervisor"
+    install -Dm755 result/bin/nns-storage-module-controller "$out/bin/nns-storage-module-controller"
   '';
   meta = {
     mainProgram = "nns-storage";

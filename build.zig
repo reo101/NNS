@@ -95,7 +95,7 @@ pub fn build(b: *std.Build) void {
     test_control.dependOn(&control_run.step);
     tests.dependOn(test_control);
 
-    const storage_step = b.step("storage", "Install the storage helper");
+    const storage_step = b.step("storage", "Install the storage helper and controllers");
     all.dependOn(storage_step);
     if (headers) |include| {
         const translation: Translator = .init(translate_c, .{
@@ -105,6 +105,27 @@ pub fn build(b: *std.Build) void {
             .link_libc = false,
         });
         translation.addSystemIncludePath(.{ .cwd_relative = include });
+        const storage_module = b.createModule(.{
+            .root_source_file = b.path("module/src/nns-storage.zig"),
+            .target = target,
+            .optimize = optimize,
+            .pic = true,
+        });
+        storage_module.addImport("linux_uapi", translation.mod);
+        const storage_namespace_tests = b.addTest(.{ .root_module = storage_module });
+        const test_storage_namespace = b.step("test-storage-namespace", "Test inherited storage namespace identity");
+        test_storage_namespace.dependOn(&b.addRunArtifact(storage_namespace_tests).step);
+        const supervisor = executable(b, "nns-storage-supervisor", "integrations/module/storage/supervisor.zig", target, optimize, false);
+        supervisor.root_module.addImport("linux_uapi", translation.mod);
+        storage_step.dependOn(&b.addInstallArtifact(supervisor, .{}).step);
+        const module_controller = executable(b, "nns-storage-module-controller", "integrations/module/storage/controller.zig", target, optimize, false);
+        module_controller.root_module.addImport("linux_uapi", translation.mod);
+        module_controller.root_module.addImport("storage", storage_module);
+        storage_step.dependOn(&b.addInstallArtifact(module_controller, .{}).step);
+        const handoff_fixture = executable(b, "nns-storage-handoff-fixture", "tests/module-storage/handoff.zig", target, optimize, false);
+        handoff_fixture.root_module.addImport("linux_uapi", translation.mod);
+        const handoff_fixture_step = b.step("storage-handoff-fixture", "Install the storage handoff test executable");
+        handoff_fixture_step.dependOn(&b.addInstallArtifact(handoff_fixture, .{}).step);
         const storage = executable(b, "nns-storage", "module/src/nns-storage.zig", target, optimize, false);
         storage.root_module.addImport("linux_uapi", translation.mod);
         storage_step.dependOn(&b.addInstallArtifact(storage, .{}).step);

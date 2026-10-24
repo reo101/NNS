@@ -185,11 +185,30 @@ fn mountCount(target: []const u8) usize {
     return count;
 }
 
-fn requireInitNamespace() void {
+fn inInitNamespace(initial_descriptor: ?i32) bool {
     const current = statAt(at_fdcwd, "/proc/self/ns/mnt", 0);
-    const initial = statAt(at_fdcwd, "/proc/1/ns/mnt", 0);
-    if (current.stx_dev_major != initial.stx_dev_major or current.stx_dev_minor != initial.stx_dev_minor or current.stx_ino != initial.stx_ino)
-        fail("init mount namespace is required", .{});
+    const initial = if (initial_descriptor) |descriptor| status(descriptor) else statAt(at_fdcwd, "/proc/1/ns/mnt", 0);
+    return current.stx_dev_major == initial.stx_dev_major and current.stx_dev_minor == initial.stx_dev_minor and current.stx_ino == initial.stx_ino;
+}
+
+test "inherited mount namespace identity" {
+    const descriptor: i32 = @intCast(checked(openAt(at_fdcwd, "/proc/self/ns/mnt", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }), "open test namespace"));
+    defer _ = linux.close(descriptor);
+    try std.testing.expect(inInitNamespace(descriptor));
+    const other: i32 = @intCast(checked(openAt(at_fdcwd, "/dev/null", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }), "open non-namespace descriptor"));
+    defer _ = linux.close(other);
+    try std.testing.expect(!inInitNamespace(other));
+}
+
+test "inherited reference rejects a private mount namespace" {
+    const descriptor: i32 = @intCast(checked(openAt(at_fdcwd, "/proc/self/ns/mnt", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }), "open test namespace"));
+    defer _ = linux.close(descriptor);
+    const result = linux.syscall1(.unshare, linux.CLONE.NEWUSER | linux.CLONE.NEWNS);
+    if (errnoCode(result)) |code| {
+        if (code == uapi.EPERM) return error.SkipZigTest;
+        fail("create test namespace: errno {d}", .{code});
+    }
+    try std.testing.expect(!inInitNamespace(descriptor));
 }
 
 fn requireEmpty(descriptor: i32) void {
@@ -290,11 +309,12 @@ fn attachLoop(image: i32, path_buffer: *[64]u8) i32 {
     fail("no loop device became available", .{});
 }
 
-pub fn run(arguments: []const [*:0]const u8) void {
+pub fn run(arguments: []const [*:0]const u8, initial_namespace: ?i32) void {
     const check = arguments.len == 2 and std.mem.eql(u8, std.mem.span(arguments[1]), "--check");
     const mode = arguments.len == 2 and std.mem.eql(u8, std.mem.span(arguments[1]), "--mode");
     if (arguments.len != 1 and !check and !mode) fail("usage: nns-storage [--check|--mode]", .{});
     if (linux.geteuid() != 0 or linux.getegid() != 0) fail("root is required", .{});
+    if (initial_namespace != null and !inInitNamespace(initial_namespace)) fail("init mount namespace is required", .{});
     const opened = openAt(at_fdcwd, storage_directory, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true });
     if (errnoCode(opened)) |code| {
         if (code != uapi.ENOENT) fail("open storage directory: errno {d}", .{code});
@@ -314,7 +334,7 @@ pub fn run(arguments: []const [*:0]const u8) void {
         message("btrfs\n");
         return;
     }
-    requireInitNamespace();
+    if (initial_namespace == null and !inInitNamespace(null)) fail("init mount namespace is required", .{});
     const image: i32 = @intCast(checked(openAt(directory, &configuration.image, .{ .ACCMODE = if (check) .RDONLY else .RDWR, .NOFOLLOW = true, .NONBLOCK = true, .NOATIME = true, .CLOEXEC = true }), "open configured image"));
     defer _ = linux.close(image);
     const image_status = status(image);
@@ -351,5 +371,5 @@ pub fn run(arguments: []const [*:0]const u8) void {
 }
 
 pub fn main(init: std.process.Init.Minimal) void {
-    run(init.args.vector);
+    run(init.args.vector, null);
 }

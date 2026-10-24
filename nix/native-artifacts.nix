@@ -32,6 +32,9 @@ stdenvNoCC.mkDerivation {
       ../module/src/dns-resolver.zig
       ../module/src/dns-resolver.h
       ../module/src/nns-storage.zig
+      ../integrations/module/storage/supervisor.zig
+      ../integrations/module/storage/controller.zig
+      ../tests/module-storage/handoff.zig
       ../module/src/storage-linux.h
       ../integrations/shizuku/rish-terminal.zig
       ../integrations/shizuku/rish-terminal.h

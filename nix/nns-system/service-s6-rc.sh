@@ -4,12 +4,18 @@
 # A failed update must not leave the dispatcher paused. A paused dispatcher hides
 # native state from the next activation and from operator control tools, so the
 # retry starts from an inconsistent tree. Restore both policy processes instead.
-resume_after_failure() {
+backend_resume_after_failure() {
     [ -d "$runtime/scan" ] || return 0
     "$sp/bin/s6-svc" -U "$runtime/scan/svc-nns-dispatcher" 2>/dev/null || :
     "$sp/bin/s6-svc" -U "$runtime/scan/s6rc-oneshot-runner" 2>/dev/null || :
 }
+backend_prepare() {
+    mkdir -p "$state/managers" "$runtime"; chmod 700 "$state/managers" "$runtime"
+    prepare_changes
+    publish_services
+}
 backend_preflight() {
+    require_no_legacy_state
     [ "$(cat "$generation/service-backend" 2>/dev/null)" = s6-rc ] || fail 'generation does not select s6-rc'
     [ -d "$generation/service-definitions/source" ] || fail 'missing s6-rc source definitions'
     check_directory "$runtime/scan"
@@ -86,7 +92,7 @@ backend_activate() {
     fi
 
     "$sp/bin/s6-svc" -wD -T5000 -POK "$runtime/scan/svc-nns-dispatcher" || fail 'cannot pause NNS dispatcher'
-    native_resume=s6-rc
+    resume_pending=1
     "$sp/bin/s6-svc" -wD -T5000 -POK "$runtime/scan/s6rc-oneshot-runner" || fail 'cannot pause s6-rc oneshot runner'
     "$sp/bin/s6-svc" -wU -T5000 -U "$runtime/scan/s6rc-oneshot-runner" || fail 'cannot restart s6-rc oneshot runner'
 
@@ -134,7 +140,7 @@ backend_activate() {
 
     "$sp/bin/s6-svc" -wU -T5000 -U "$runtime/scan/s6rc-oneshot-runner" || fail 'cannot re-enable s6-rc oneshot runner'
     "$sp/bin/s6-svc" -U "$runtime/scan/svc-nns-dispatcher" || fail 'cannot re-enable NNS dispatcher'
-    native_resume=
+    resume_pending=
     remove_obsolete_services
 }
 

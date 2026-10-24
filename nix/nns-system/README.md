@@ -6,6 +6,29 @@ NNS selects one service manager for the whole system. Android init remains PID 1
 system.serviceManager = "runit"; # Default. Alternatives: "s6-rc", "dinit".
 ```
 
+`system.serviceManagers.<name>` defines the implementations that `system.serviceManager` can select. A built-in entry supplies two values.
+
+```nix
+system.serviceManagers.<name> = {
+  controller = ./service-<name>.sh; # Required. Sourced by the runtime.
+  runtimePackages = [ ]; # Optional. Supervision and control tools.
+};
+```
+
+The runtime sources the controller of the selected generation. A controller defines five shell functions.
+
+| Function | Purpose |
+| --- | --- |
+| `backend_preflight` | Refuse an unusable candidate before publication |
+| `backend_prepare` | Publish the service tree and change intent |
+| `backend_activate` | Reconcile the running manager with the generation |
+| `backend_stop` | Stop supervision for shutdown or handoff |
+| `backend_resume_after_failure` | Restore the policy process after an aborted reconciliation |
+
+The runtime owns locking, state validation, supervisor registration, and generation publication. A controller owns manager-specific state under `state/managers/<name>/`.
+
+Rendering still follows the selected name. A new name needs a matching renderer. The controller hook removes backend names from the runtime, not from the renderer.
+
 `system.services.<name>` declares services for the selected backend. Built-in services and generated directory actions use this collection too. Higher-level options such as `services.openssh` remain separate.
 
 The old `services.runit` option is removed. Rename it to `system.services`. Old declarations fail evaluation with a migration message. Existing built generations remain usable.

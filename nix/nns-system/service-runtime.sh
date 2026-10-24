@@ -4,15 +4,12 @@ fail() { printf 'nns services: %s\n' "$*" >&2; exit 1; }
 # A native reconciliation that aborts must restore the policy process. The
 # dispatcher is paused or stopped for a database switch, and leaving it stopped
 # hides native state from the next activation and from operator control tools.
-native_resume=
+resume_pending=
 updates=
 resume_policy_process() {
-    case ${native_resume:-} in
-        '') return 0;;
-        s6-rc) native_resume=; resume_after_failure;;
-        dinit) native_resume=; dinit_resume_after_failure;;
-        *) native_resume=;;
-    esac
+    [ -n "${resume_pending:-}" ] || return 0
+    resume_pending=
+    backend_resume_after_failure
 }
 service_exit_cleanup() {
     status=$?
@@ -49,9 +46,9 @@ if [ -f "$generation/service-protocol" ]; then
     [ "$(cat "$generation/service-protocol")" = 1 ] || fail 'unsupported candidate service protocol'
     [ -x "$generation/service-control" ] || fail 'candidate service controller is missing'
 else
-    [ "$backend" = runit ] || fail 'native generation has no service protocol'
+    fail 'generation has no service protocol'
 fi
-case $backend in runit|s6-rc|dinit) ;; *) fail "unknown backend: $backend";; esac
+case $backend in ''|*[!A-Za-z0-9_-]*) fail "invalid backend name: $backend";; esac
 runtime=$state/managers/$backend
 for directory in "$generation" "$state" "${state%/*}" "$state/services" "$state/bin" "$state/managers" "$runtime"; do check_directory "$directory"; done
 for directory in "$state/services"/*; do
@@ -199,174 +196,25 @@ publish_services() {
 remove_obsolete_services() {
     while IFS= read -r identifier; do rm -rf -- "$state/services/${identifier#svc-}"; done < "$updates/removed"
 }
-runit_activate() {
-    start_scanner=false
-    if ! manager_running; then start_scanner=true; fi
-    for directory in "$state/services"/*; do
-        [ -e "$directory" ] || continue
-        check_directory "$directory"
-        if [ ! -d "$generation/services/${directory##*/}" ]; then
-            if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-                sv -w 10 down "$directory"; sv -w 10 exit "$directory"
-            fi
-            rm -rf -- "$directory"
-        fi
-    done
-    # Invalidate all finite results before publishing any replacement definition.
-    for entry in "$generation/services"/*; do
-        [ -e "$entry" ] || continue
-        directory=$state/services/${entry##*/}
-        if [ -f "$entry/oneshot" ] || [ -f "$directory/oneshot" ]; then
-            if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then sv -w 10 down "$directory"; fi
-            rm -f "$directory/completed" "$directory/exit-status"
-        fi
-    done
-    for entry in "$generation/services"/*; do
-        [ -e "$entry" ] || continue
-        directory=$state/services/${entry##*/}
-        check_directory "$directory"
-        previous_run=$(readlink "$directory/run" 2>/dev/null || :)
-        target=$(readlink -f "$entry/run")
-        previous_oneshot=false
-        if [ -f "$directory/oneshot" ]; then previous_oneshot=true; fi
-        destination=$directory
-        if [ ! -d "$directory" ]; then destination=$(mktemp -d "$state/.service.${entry##*/}.XXXXXXXX"); fi
-        chmod 700 "$destination"
-        ln -s "$target" "$destination/.run.$$"
-        mv -Tf "$destination/.run.$$" "$destination/run"
-        if [ -f "$entry/oneshot" ]; then
-            : > "$destination/oneshot"; : > "$destination/down"
-            ln -s "$(readlink -f "$entry/finish")" "$destination/.finish.$$"
-            mv -Tf "$destination/.finish.$$" "$destination/finish"
-        else
-            rm -f "$destination/oneshot" "$destination/finish"
-            # A coordinated shutdown leaves down files for scanner safety.
-            if [ "$previous_oneshot" = true ] || [ "$start_scanner" = true ]; then rm -f "$destination/down"; fi
-        fi
-        if [ "$destination" != "$directory" ]; then mv -T "$destination" "$directory"; fi
-        if [ ! -f "$entry/oneshot" ] && { [ "$previous_run" != "$target" ] || [ "$previous_oneshot" = true ]; } && [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-            sv -w 10 restart "$directory"
-        fi
-    done
-    if ! manager_running; then start_supervisor "$sp/bin/runsvdir" "$state/services"; fi
-    # Adopt a legacy scanner using one validated PID snapshot. Replace both
-    # files so an old open descriptor cannot modify the new ownership record.
-    if [ ! -f "$state/manager-process" ] && manager_running; then
-        pid=$(cat "$state/supervisor.pid")
-        identity=$(process_identity "$pid") || fail 'legacy supervisor identity changed'
-        grep -aq 'runsvdir' "/proc/$pid/cmdline" || fail 'legacy supervisor command changed'
-        tr '\000' '\n' < "/proc/$pid/cmdline" | grep -Fxq "$state/services" || fail 'legacy supervisor command changed'
-        temporary=$(mktemp "$state/.supervisor.XXXXXXXX")
-        printf '%s\n' "$pid" > "$temporary"
-        mv -Tf "$temporary" "$state/supervisor.pid"
-        temporary=$(mktemp "$state/.manager-process.XXXXXXXX")
-        printf '%s %s\n' "$pid" "$identity" > "$temporary"
-        mv -Tf "$temporary" "$state/manager-process"
-    fi
-    for entry in "$generation/services"/*; do
-        [ -f "$entry/oneshot" ] || continue
-        directory=$state/services/${entry##*/}; attempts=0
-        until sv status "$directory" >/dev/null 2>&1; do
-            attempts=$((attempts + 1)); [ "$attempts" -lt 10 ] || fail "oneshot is not supervised: ${entry##*/}"; sleep 1
-        done
-        sv up "$directory"
-    done
-}
-runit_stop() {
-    # Stop the scanner first: it must not recreate supervisors during teardown.
-    if manager_running; then kill -TERM "$(cat "$state/supervisor.pid")"; wait_supervisor_exit; fi
-    set --
-    for directory in "$state/services"/*; do
-        [ -d "$directory" ] || continue
-        if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-            : > "$directory/down"
-            set -- "$@" "$directory"
-        fi
-    done
-    if [ "$#" -gt 0 ]; then sv -w 10 down "$@"; sv -w 10 exit "$@"; fi
-}
-dinit_control() { dinitctl --quiet --socket-path "$runtime/control" "$@"; }
-# A failed native reconciliation must leave the policy process running, or the
-# next activation inherits stopped services without a dispatcher to restart them.
-dinit_resume_after_failure() {
-    [ -d "$runtime/services" ] || return 0
-    dinit_control start --no-wait svc-nns-dispatcher 2>/dev/null || :
-}
-dinit_preflight() {
-    "$sp/bin/dinit" --version >/dev/null || fail 'Dinit executable is unavailable'
-    "$sp/bin/dinitctl" --version >/dev/null || fail 'Dinit control executable is unavailable'
-    check_directory "$runtime/services"
-    if [ -f "$state/manager-process" ] && [ "$previous" != '' ] && [ "$(backend_of "$previous")" = dinit ] && ! manager_running; then
-        case "$(cat "$state/manager-process")" in
-            *" $boot_id") fail 'Dinit exited unexpectedly this boot; refusing to create a duplicate owner';;
-        esac
-    fi
-    [ -d "$generation/service-definitions/services" ] || fail 'missing Dinit definitions'
-}
-dinit_activate() {
-    if ! manager_running; then
-        # The preflight rejects a same-boot manager crash with unknown children.
-        rm -rf -- "$runtime/services"
-    fi
-    if manager_running; then
-        dinit_control stop --force --ignore-unstarted svc-nns-dispatcher
-        native_resume=dinit
-        for list in changed finite removed; do
-            while IFS= read -r identifier; do dinit_control stop --force --ignore-unstarted "$identifier"; done < "$updates/$list"
-        done
-    fi
-    invalidate_oneshots
-    mkdir -p "$runtime/services"
-    for file in "$generation/service-definitions/services"/*; do
-        name=${file##*/}; valid_name "$name" || fail "invalid Dinit definition: $name"
-        ln -s "$(readlink -f "$file")" "$runtime/services/.$name.$$"
-        mv -Tf "$runtime/services/.$name.$$" "$runtime/services/$name"
-    done
-    if manager_running; then
-        while IFS= read -r identifier; do dinit_control reload "$identifier"; done < "$generation/all-services"
-        cp "$updates/removed" "$updates/unload"
-        while [ -s "$updates/unload" ]; do
-            : > "$updates/remaining"; progress=false
-            while IFS= read -r identifier; do
-                if dinit_control unload "$identifier"; then progress=true; else printf '%s\n' "$identifier" >> "$updates/remaining"; fi
-            done < "$updates/unload"
-            [ "$progress" = true ] || fail 'cannot unload obsolete Dinit services'
-            mv -Tf "$updates/remaining" "$updates/unload"
-        done
-        while IFS= read -r identifier; do rm -f "$runtime/services/$identifier"; done < "$updates/removed"
-        dinit_control reload svc-nns-dispatcher
-        dinit_control start --no-wait svc-nns-dispatcher
-        native_resume=
-    else
-        # A prior-boot socket is not evidence of a live manager.
-        rm -f "$runtime/control"
-        start_supervisor "$sp/bin/dinit" --system --container --services-dir "$runtime/services" --socket-path "$runtime/control" nns-runtime svc-nns-dispatcher
-    fi
-    attempts=0
-    until dinit_control status svc-nns-dispatcher >/dev/null 2>&1; do
-        attempts=$((attempts + 1)); [ "$attempts" -lt 10 ] || fail 'Dinit did not become available'; sleep 1
-    done
-    native_resume=
-    remove_obsolete_services
-}
-dinit_stop() {
-    if manager_running; then
-        dinit_control shutdown
-        wait_supervisor_exit
-    else
-        dinit_preflight
-    fi
-}
+# The backend controller supplies backend_preflight, backend_prepare,
+# backend_activate, backend_stop, and backend_resume_after_failure. The
+# runtime owns locking, state validation, supervisor registration, and
+# generation publication.
 # shellcheck disable=SC1090
-if [ "$backend" = s6-rc ]; then . "${NNS_S6_RUNTIME:-${0%/*}/service-s6-rc.sh}"; fi
+controller=$generation/service-backend.sh
+[ -f "$controller" ] || fail 'generation has no service backend controller'
+. "$controller"
+# A backend change must not inherit a legacy runit tree whose supervisors the
+# new backend cannot own. Only the first backend-aware activation is affected.
+require_no_legacy_state() {
+    [ -n "$previous" ] && return 0
+    [ ! -e "$state/supervisor.pid" ] || fail 'activate a backend-aware runit generation before changing backend'
+    for directory in "$state/services"/*; do
+        [ ! -e "$directory" ] || fail 'activate a backend-aware runit generation before changing backend'
+    done
+}
 preflight() {
-    if [ "$backend" != runit ] && [ -z "$previous" ]; then
-        [ ! -e "$state/supervisor.pid" ] || fail 'activate a backend-aware runit generation before changing backend'
-        for directory in "$state/services"/*; do
-            [ ! -e "$directory" ] || fail 'activate a backend-aware runit generation before changing backend'
-        done
-    fi
-    case $backend in s6-rc) backend_preflight;; dinit) dinit_preflight;; esac
+    backend_preflight
 }
 case $operation in
     preflight) preflight;;
@@ -379,24 +227,17 @@ case $operation in
             mkdir -m 700 "$state/services"
         fi
         publish_generation
-        case $backend in
-            runit) runit_activate;;
-            *)
-                mkdir -p "$state/managers" "$runtime"; chmod 700 "$state/managers" "$runtime"
-                prepare_changes
-                publish_services
-                case $backend in s6-rc) backend_activate;; dinit) dinit_activate;; esac
-                for entry in "$generation/services"/*; do
-                    [ ! -d "$entry" ] || rm -f "$state/services/${entry##*/}/pending-update"
-                done
-                ;;
-        esac
+        backend_prepare
+        backend_activate
+        for entry in "$generation/services"/*; do
+            [ ! -d "$entry" ] || rm -f "$state/services/${entry##*/}/pending-update"
+        done
         ;;
     stop)
         if [ -n "$previous" ] && [ "$(backend_of "$previous")" != "$backend" ]; then
             "$previous/service-control" stop
         else
-            case $backend in runit) runit_stop;; s6-rc) backend_stop;; dinit) dinit_stop;; esac
+            backend_stop
         fi
         rm -f "$state/supervisor.pid" "$state/manager-process"
         ;;

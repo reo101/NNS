@@ -55,15 +55,7 @@ let
     }
   ) cfg.environment.profiles;
   nativeBackend = cfg.system.serviceManager != "runit";
-  nativeRuntimePackages =
-    {
-      s6-rc = [
-        pkgs.s6
-        pkgs.s6-rc
-      ];
-      dinit = [ pkgs.dinit ];
-    }
-    .${cfg.system.serviceManager} or [ ];
+  serviceManagerDefinition = cfg.system.serviceManagers.${cfg.system.serviceManager};
   infrastructure = import ../system-profile.nix {
     phonePkgs = pkgs;
     nixPackage = cfg.nix.package;
@@ -73,7 +65,7 @@ let
       pkgs.openssh
       pkgs.cacert
     ]
-    ++ nativeRuntimePackages;
+    ++ serviceManagerDefinition.runtimePackages;
   };
   state = cfg.system.stateDirectory;
   etcDirectory = cfg.system.etcDirectory;
@@ -431,6 +423,7 @@ let
     mkdir -p "$out/profiles" "$out/services" "$out/authorized_keys"
     ln -s ${infrastructure} "$out/system-profile"
     ln -s ${etc} "$out/etc"
+    ln -s ${serviceManagerDefinition.controller} "$out/service-backend.sh"
     ${lib.pipe profiles [
       (lib.mapAttrsToList (name: profile: ''ln -s ${profile} "$out/profiles/${name}"''))
       (lib.concatStringsSep "\n")
@@ -545,12 +538,46 @@ in
       description = "Administrative daemon configuration. Build isolation remains deferred.";
     };
     system = {
+      serviceManagers = mkOption {
+        default = {
+          runit = {
+            controller = ./service-runit.sh;
+          };
+          s6-rc = {
+            controller = ./service-s6-rc.sh;
+            runtimePackages = [
+              pkgs.s6
+              pkgs.s6-rc
+            ];
+          };
+          dinit = {
+            controller = ./service-dinit.sh;
+            runtimePackages = [ pkgs.dinit ];
+          };
+        };
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              controller = mkOption {
+                type = types.path;
+                description = ''
+                  Shell implementation sourced by the runtime. It defines
+                  backend_preflight, backend_prepare, backend_activate,
+                  backend_stop, and backend_resume_after_failure.
+                '';
+              };
+              runtimePackages = mkOption {
+                type = types.listOf types.package;
+                default = [ ];
+                description = "Packages added to the system profile for supervision and control tools.";
+              };
+            };
+          }
+        );
+        description = "Service manager implementations selectable through system.serviceManager.";
+      };
       serviceManager = mkOption {
-        type = types.enum [
-          "runit"
-          "s6-rc"
-          "dinit"
-        ];
+        type = types.enum (builtins.attrNames cfg.system.serviceManagers);
         default = "runit";
         description = "Service manager used to render and control NNS services.";
       };

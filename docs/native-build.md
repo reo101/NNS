@@ -1,8 +1,7 @@
 # Native builds
 
-Zig 0.17 compiles the core NNS native artifacts through the root
-`build.zig`: the launcher, DNS bridge and resolver, terminal supervisor,
-and experimental FIFO client. Nix fetches dependencies, selects targets, supplies headers,
+Zig 0.17 compiles the standalone NNS Zig and C artifacts through the root
+`build.zig`. Nix fetches dependencies, selects targets, supplies headers,
 and packages the results. APK, ROM, kernel, and Android platform fixture
 builds remain in their existing build systems.
 
@@ -12,13 +11,14 @@ builds remain in their existing build systems.
 nix build .#nns-native
 nix build .#nix-enter .#nix-enter-host
 nix build .#nns-dns
+nix build .#nns-storage .#nns-storage-host
 nix build .#checks.x86_64-linux.nns-native
 nix run .#test-userns
 ```
 
-`nns-native` builds the complete ARM64 core artifact set. The individual
-packages still use separate derivations and source file sets. A launcher
-build does not require the Android NDK.
+`nns-native` builds the complete ARM64 artifact set. The individual packages
+still use separate derivations and source file sets. A launcher build does
+not require the Android SDK or Linux headers.
 
 `build.zig.zon` pins the official external `translate-c` package. Its pinned
 `aro` dependency supplies the C parser. `nix/zig-dependencies.nix` fetches the
@@ -46,11 +46,13 @@ Artifacts install under `zig-out/`. Use `--prefix` to select another directory.
 | `dns` | Bionic resolver and libc-neutral preload library | Android sysroot |
 | `rish-terminal` | Android terminal supervisor | Android sysroot |
 | `service-control` | Experimental runit FIFO client | None |
-| `all` | All the above | Android sysroot |
+| `storage` | Static storage executable | Linux headers |
+| `native-probes` | Static fscrypt-policy and storage-execution probes | Optional Linux header override |
+| `all` | All the above | Android sysroot and Linux headers |
 
 `zig build` defaults to `all`. Pass `-Dandroid-sysroot=/path/to/sysroot`
-for that step. A missing sysroot fails only the steps that require it.
-`-Dtarget` selects the Linux target;
+and `-Dlinux-headers=/path/to/include` for that step. Missing inputs fail only
+the steps that require them. `-Dtarget` selects the Linux target;
 `-Darch=aarch64` or `-Darch=x86_64` selects the Android architecture.
 `-Doptimize=small` selects stripped size-optimized builds.
 

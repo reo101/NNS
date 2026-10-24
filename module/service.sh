@@ -7,10 +7,16 @@
 # Aligned labels avoid relabel denials; skipping the store also requires
 # its security.sehash digest (see module/README.md). New objects inherit
 # the label from their parent dirs. Label only public store/config, never app data.
+MODDIR=${0%/*}
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin
 LOG=/data/local/tmp/nix-service.log
 exec > "$LOG" 2>&1
 
+storage_mode=$("$MODDIR/bin/nns-storage" --mode) || exit 1
+if [ "$storage_mode" = btrfs ]; then
+  "$MODDIR/bin/nns-storage" || exit 1
+  sh "$MODDIR/prepare-runtime.sh" || exit 1
+fi
 [ -d /data/nix/store ] || exit 0
 for path in /data/nix /data/nix/store /data/nix/etc /data/nix/etc/nix /data/nix/etc/profile /data/nix/etc/nix/nix.conf \
     /data/nix/var /data/nix/var/nix; do

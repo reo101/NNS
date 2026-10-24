@@ -34,10 +34,10 @@ From `outputs.nix`: `nns-module`, `nix-enter` (+ `-host`), `nns-dns`,
 
 ## Native builds
 
-`build.zig` compiles the core native artifacts and runs their tests.
-`nix build .#nns-native` builds the complete ARM64 core set. Existing per-artifact
-packages remain separate. Nix supplies pinned dependencies and the Android NDK.
-Compilation does not download packages.
+`build.zig` compiles the standalone Zig and C artifacts and runs their tests.
+`nix build .#nns-native` builds the complete ARM64 set. Existing per-artifact
+packages remain separate. Nix supplies pinned dependencies, the Android NDK,
+and Linux headers; compilation does not download packages.
 
 See [native build instructions](docs/native-build.md) for named steps,
 host tests, and direct Zig builds. APK, ROM, and kernel assembly remain in

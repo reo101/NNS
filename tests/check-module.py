@@ -9,8 +9,8 @@ arch = sys.argv[2] if len(sys.argv) > 2 else 'arm64'
 machine = {'arm64': 183, 'x64': 62}[arch]
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
-    required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh', 'skip_mount',
-                'sepolicy.rule', 'bin/nix-enter', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo',
+    required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh', 'skip_mount',
+                'sepolicy.rule', 'bin/nix-enter', 'bin/nns-storage', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo',
                 'bin/rish-probe', 'bin/nns-rish-terminal', 'lib/libnns-dns.so', 'lib/rish.dex', 'etc/profile', 'etc/nix/nix.conf'}
     assert names == required, names ^ required
     assert z.testzip() is None
@@ -24,10 +24,10 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     for name in names:
         assert not Path(name).is_absolute() and '..' not in Path(name).parts
         assert z.getinfo(name).date_time == (1980, 1, 1, 0, 0, 0)
-    for name in ('bin/nix-enter', 'bin/nns-resolver', 'bin/nns-rish-terminal', 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe',
-                 'customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh'):
+    for name in ('bin/nix-enter', 'bin/nns-storage', 'bin/nns-resolver', 'bin/nns-rish-terminal', 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe',
+                 'customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh'):
         assert (z.getinfo(name).external_attr >> 16) & stat.S_IXUSR, name
-    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh',
+    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh',
                  'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe'):
         assert z.read(name).startswith(b'#!/system/bin/sh\n')
         assert b'@APP_' not in z.read(name), name
@@ -42,6 +42,14 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     entsize, count = struct.unpack_from('<HH', elf, 54)
     assert all(struct.unpack_from('<I', elf, phoff+i*entsize)[0] != 3
                for i in range(count)), 'dynamic interpreter present'
+    storage = z.read('bin/nns-storage')
+    assert storage[:6] == b'\x7fELF\x02\x01'
+    assert struct.unpack_from('<H', storage, 18)[0] == machine
+    storage_phoff = struct.unpack_from('<Q', storage, 32)[0]
+    storage_entsize, storage_count = struct.unpack_from('<HH', storage, 54)
+    assert all(struct.unpack_from('<I', storage, storage_phoff+i*storage_entsize)[0] != 3
+               for i in range(storage_count)), 'storage helper has a dynamic interpreter'
+    assert b'/nix/store/' not in storage
     for name in ('bin/nns-resolver', 'bin/nns-rish-terminal', 'lib/libnns-dns.so'):
         elf = z.read(name)
         assert elf[:6] == b'\x7fELF\x02\x01'

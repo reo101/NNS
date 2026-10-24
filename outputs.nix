@@ -37,6 +37,10 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         sources = pkgs.callPackage ./kernel/sources.nix { };
         clang = pkgs.callPackage ./kernel/clang.nix { inherit sources; };
         launcher = pkgs.callPackage ./nix/launcher.nix { };
+        storage = pkgs.callPackage ./nix/storage.nix { };
+        hostStorage = storage.override {
+          target = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl";
+        };
         hostLauncher = launcher.override {
           target = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl";
         };
@@ -56,7 +60,14 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         # Device specializations call this with their own values (see
         # specialized/).
         mkModule = { arch ? "arm64", launcher, dns, rish, appUid, appGid, appId }:
-          pkgs.callPackage ./nix/module.nix { inherit arch appUid appGid appId launcher dns rish policy; };
+          pkgs.callPackage ./nix/module.nix {
+            inherit arch appUid appGid appId launcher dns rish policy;
+            storage = storage.override {
+              target = if arch == "arm64" then "aarch64-linux-musl"
+                else if arch == "x64" then "x86_64-linux-musl"
+                else throw "Unsupported module architecture: ${arch}";
+            };
+          };
         androidTestPkgs = import inputs.nixpkgs {
           inherit system;
           config = { allowUnfree = true; android_sdk.accept_license = true; };
@@ -161,6 +172,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           nns-sepolicy-candidates = policyCandidates;
           nix-enter = launcher;
           nns-native = pkgs.callPackage ./nix/native-artifacts.nix { };
+          nns-storage = storage;
+          nns-storage-host = hostStorage;
           nns-dns = dns;
           emacs-integration = emacs;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
@@ -218,6 +231,8 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           '';
           nns-nod-consumer = import ./tests/test-nod-consumer.nix { inherit pkgs; };
           emacs-integration = emacs;
+        } // lib.optionalAttrs (system == "x86_64-linux") {
+          nns-storage = import ./tests/test-module-storage.nix { inherit pkgs; storage = hostStorage; };
         };
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.android-tools pkgs.zig pkgs.python3 pkgs.runit ];

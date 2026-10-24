@@ -5,9 +5,13 @@
 
 set_perm_recursive "$MODPATH" 0 0 0755 0644
 set_perm "$MODPATH/bin/nix-enter" 0 0 0755
+set_perm "$MODPATH/bin/nns-storage" 0 0 0755
 set_perm "$MODPATH/bin/nns-resolver" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
+set_perm "$MODPATH/prepare-runtime.sh" 0 0 0755
+
+"$MODPATH/bin/nns-storage" --check || abort "Configured Nix backing is not ready."
 
 mkdir -p /data/nix/etc/nix /data/nix/var/log
 # Seed defaults on first install; preserve user configuration on upgrades.

@@ -7,8 +7,9 @@ pub fn build(b: *std.Build) void {
     const arch = b.option(std.Target.Cpu.Arch, "arch", "Android CPU architecture") orelse target.result.cpu.arch;
     if (arch != .aarch64 and arch != .x86_64) @panic("NNS supports aarch64 and x86_64");
     const sysroot = b.option([]const u8, "android-sysroot", "NDK toolchain/sysroot for Android binaries");
+    const headers = b.option([]const u8, "linux-headers", "Target Linux UAPI include directory");
     const translate_c = b.dependency("translate_c", .{ .optimize = .small });
-    const all = b.step("all", "Install all core native artifacts (requires Android sysroot)");
+    const all = b.step("all", "Install all native artifacts (requires Android sysroot and Linux headers)");
     const tests = b.step("test", "Run sandbox-safe native tests");
     const host = b.resolveTargetQuery(.{ .cpu_arch = b.graph.host.result.cpu.arch, .os_tag = .linux, .abi = .musl });
 
@@ -94,6 +95,29 @@ pub fn build(b: *std.Build) void {
     test_control.dependOn(&control_run.step);
     tests.dependOn(test_control);
 
+    const storage_step = b.step("storage", "Install the storage helper");
+    all.dependOn(storage_step);
+    if (headers) |include| {
+        const translation: Translator = .init(translate_c, .{
+            .c_source_file = b.path("module/src/storage-linux.h"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = false,
+        });
+        translation.addSystemIncludePath(.{ .cwd_relative = include });
+        const storage = executable(b, "nns-storage", "module/src/nns-storage.zig", target, optimize, false);
+        storage.root_module.addImport("linux_uapi", translation.mod);
+        storage_step.dependOn(&b.addInstallArtifact(storage, .{}).step);
+    } else storage_step.dependOn(&b.addFail("pass -Dlinux-headers=/path/to/target/linux/include").step);
+
+    const probes = b.step("native-probes", "Install static namespace and storage probes");
+    all.dependOn(probes);
+    inline for (.{ "fscrypt-policy", "storage-execution" }) |name| {
+        const probe = cExecutable(b, name, target, optimize, &.{b.fmt("tests/android/{s}.c", .{name})});
+        probe.root_module.addCMacro("_GNU_SOURCE", "1");
+        if (headers) |include| probe.root_module.addSystemIncludePath(.{ .cwd_relative = include });
+        install(b, probes, name, probe);
+    }
     b.getInstallStep().dependOn(all);
 }
 
@@ -131,6 +155,17 @@ fn controlExecutable(b: *std.Build, translate_c: *std.Build.Dependency, name: []
     const exe = executable(b, name, "experiments/activation/service-control.zig", target, optimize, true);
     const translation: Translator = .init(translate_c, .{ .c_source_file = b.path("experiments/activation/service-control.h"), .target = target, .optimize = optimize });
     exe.root_module.addImport("c", translation.mod);
+    return exe;
+}
+
+fn cExecutable(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, sources: []const []const u8) *std.Build.Step.Compile {
+    const exe = b.addExecutable(.{ .name = name, .linkage = .static, .root_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .strip = optimize != .debug,
+    }) });
+    exe.root_module.addCSourceFiles(.{ .files = sources, .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" } });
     return exe;
 }
 

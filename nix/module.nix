@@ -1,4 +1,4 @@
-{ lib, stdenvNoCC, launcher, dns, policy, rish, zip, python3, arch ? "arm64",
+{ lib, stdenvNoCC, launcher, storage, dns, policy, rish, zip, python3, arch ? "arm64",
   # Assigned per install; supply the host's app uid/gid, e.g.
   # mkModule { appUid = ...; appGid = ...; } in outputs.nix.
   appUid ? throw "nix/module.nix: appUid not supplied; pass the host's Android app uid",
@@ -16,6 +16,7 @@ stdenvNoCC.mkDerivation {
       ../module/customize.sh
       ../module/post-fs-data.sh
       ../module/service.sh
+      ../module/prepare-runtime.sh
       ../module/stage-etc.sh
       ../module/stage-android-runtime.sh
       ../module/system-generation.sh
@@ -31,15 +32,16 @@ stdenvNoCC.mkDerivation {
     runHook preBuild
     mkdir -p module/bin module/lib module/etc/nix
     cp ${launcher}/bin/nix-enter module/bin/nix-enter
+    cp ${storage}/bin/nns-storage module/bin/nns-storage
     cp ${dns}/bin/nns-resolver module/bin/nns-resolver
     cp ${dns}/lib/libnns-dns.so module/lib/libnns-dns.so
     cp ${rish}/bin/rish ${rish}/bin/su ${rish}/bin/sudo ${rish}/bin/rish-probe ${rish}/bin/nns-rish-terminal module/bin/
     cp ${rish}/lib/rish.dex module/lib/rish.dex
-    cp module.prop customize.sh post-fs-data.sh service.sh stage-etc.sh stage-android-runtime.sh system-generation.sh module/
+    cp module.prop customize.sh post-fs-data.sh service.sh prepare-runtime.sh stage-etc.sh stage-android-runtime.sh system-generation.sh module/
     cp ${policy} module/sepolicy.rule
     substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
     # The app uid/gid/appId are assigned per install; every build names them.
-    substituteInPlace module/post-fs-data.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}' --replace-fail '@APP_ID@' '${appId}'
+    substituteInPlace module/prepare-runtime.sh --replace-fail '@APP_UID@' '${builtins.toString appUid}' --replace-fail '@APP_GID@' '${builtins.toString appGid}' --replace-fail '@APP_ID@' '${appId}'
     # The wrappers carry the app id only as the baked fallback default;
     # the staged /data/nix/etc/app-id file is the per-host source.
     substituteInPlace module/bin/rish --replace-fail '@APP_ID@' '${appId}'

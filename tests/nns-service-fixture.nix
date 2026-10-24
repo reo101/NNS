@@ -40,7 +40,7 @@ in
           };
         };
       };
-      services.runit = {
+      system.services = {
         nix-daemon.nns.enable = false;
         prepare = {
           nns.type = "oneshot";

@@ -132,7 +132,7 @@ in
           };
         };
       };
-      services.runit = {
+      system.services = {
         worker = {
           nns = {
             type = serviceType;

@@ -28,11 +28,11 @@ let
         group = "root";
         mode = "2710";
       };
-      services.runit.initialize = {
+      system.services.initialize = {
         nns.type = "oneshot";
         process.argv = [ "/system/bin/true" ];
       };
-      services.runit.example = {
+      system.services.example = {
         process.argv = [
           "${pkgs.coreutils}/bin/sleep"
           "infinity"
@@ -68,29 +68,31 @@ assert
   ];
 assert valid.config.nix.package == pkgs.nix;
 assert
-  selectedNix.config.services.runit.nix-daemon.process.argv == [
+  selectedNix.config.system.services.nix-daemon.process.argv == [
     "${pkgs.nixVersions.latest}/bin/nix-daemon"
   ];
 assert valid.config.accounts.root.openssh.authorizedKeys.keys == [ "ssh-ed25519 AAAAROOT root" ];
-assert valid.config.services.runit.initialize.nns.type == "oneshot";
-assert valid.config.services.runit.example.nns.type == "longrun";
-assert valid.config.services.runit.directory-shared.nns.type == "oneshot";
+assert valid.config.system.services.initialize.nns.type == "oneshot";
+assert valid.config.system.services.example.nns.type == "longrun";
+assert valid.config.system.services.directory-shared.nns.type == "oneshot";
 assert valid.config.environment.profiles.development.variables.EDITOR == "emacsclient -t";
-assert valid.config.services.runit.sshd.process.argv != [ ];
-assert valid.config.services.runit.nix-daemon.process.environment.NIX_REMOTE == "local";
+assert valid.config.system.services.sshd.process.argv != [ ];
+assert valid.config.system.services.nix-daemon.process.environment.NIX_REMOTE == "local";
+assert rejects { services.runit = { }; };
+assert rejects { services.runit.legacy.process.argv = [ "/system/bin/true" ]; };
 assert rejects { environment.profiles.development.variables.HOME = "/tmp"; };
 assert rejects { environment.profiles.nns-system.packages = [ ]; };
 assert rejects { environment.profiles."invalid.name".packages = [ ]; };
 assert rejects { environment.profiles.development-1-link.packages = [ ]; };
 assert rejects {
-  services.runit.invalid.process = {
+  system.services.invalid.process = {
     argv = [ "/system/bin/true" ];
     environment.PATH = "/app/bin";
   };
 };
-assert rejects { services.runit.invalid.process.argv = [ "/app/bin/command" ]; };
+assert rejects { system.services.invalid.process.argv = [ "/app/bin/command" ]; };
 assert rejects {
-  services.runit = {
+  system.services = {
     first = {
       process.argv = [ "/system/bin/true" ];
       nns.after = [ "second" ];
@@ -124,7 +126,7 @@ assert rejects {
     home = "/home/invalid";
   };
 };
-assert rejects { services.runit.invalid.process.argv = [ ]; };
+assert rejects { system.services.invalid.process.argv = [ ]; };
 assert rejects {
   system.directories.invalid = {
     path = "/tmp/../bad";

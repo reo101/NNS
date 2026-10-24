@@ -198,7 +198,7 @@ Android's own `/etc` remains unchanged.
 Declare services in the NNS host, not the NoD configuration:
 
 ```nix
-services.runit.example = {
+system.services.example = {
   process.argv = [ "/system/bin/sleep" "3600" ];
   process.environment.EXAMPLE = "value with spaces";
   nns.startAt = "unlock";

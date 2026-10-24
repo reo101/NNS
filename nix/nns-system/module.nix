@@ -129,7 +129,7 @@ let
         })
       ];
     }).serviceSubmodule;
-  enabledServices = lib.filterAttrs (_: service: service.nns.enable) cfg.services.runit;
+  enabledServices = lib.filterAttrs (_: service: service.nns.enable) cfg.system.services;
   renderService =
     name: service:
     pkgs.writeScript "nns-service-${name}" /* bash */ ''
@@ -506,6 +506,11 @@ let
 in
 {
   _class = "nns";
+  imports = [
+    (lib.mkRemovedOptionModule [ "services" "runit" ] ''
+      Use `system.services` for service declarations and `system.serviceManager` to select the backend.
+    '')
+  ];
   options = {
     assertions = mkOption {
       type = types.listOf types.unspecified;
@@ -539,6 +544,11 @@ in
         ];
         default = "runit";
         description = "Service manager used to render and control NNS services.";
+      };
+      services = mkOption {
+        default = { };
+        type = types.attrsOf serviceType;
+        description = "Backend-neutral service definitions managed by the selected NNS service manager.";
       };
       build.toplevel = mkOption {
         type = types.package;
@@ -588,10 +598,6 @@ in
           }
         )
       );
-    };
-    services.runit = mkOption {
-      default = { };
-      type = types.attrsOf serviceType;
     };
     services.openssh = mkOption {
       default = { };
@@ -682,7 +688,7 @@ in
       shell = "/system/bin/false";
     };
     system.build.toplevel = generation;
-    services.runit =
+    system.services =
       lib.mapAttrs' (
         name: directory:
         lib.nameValuePair "directory-${name}" {
@@ -762,7 +768,7 @@ in
       ++ lib.concatLists (
         lib.mapAttrsToList (
           name: service:
-          serviceLib.getAssertions [ "services" "runit" name ] service
+          serviceLib.getAssertions [ "system" "services" name ] service
           ++ [
             {
               assertion =
@@ -789,10 +795,10 @@ in
                 && service.process.reloadCommand == null
                 && !service.notificationProtocol.systemd
                 && !service.notificationProtocol.s6;
-              message = "Invalid or unsupported NNS runit service: ${name}";
+              message = "Invalid or unsupported NNS service: ${name}";
             }
           ]
-        ) cfg.services.runit
+        ) cfg.system.services
       )
       ++ [
         {

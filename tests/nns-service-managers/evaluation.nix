@@ -33,12 +33,19 @@ let
 in
 assert (evaluate pkgs [ ]).config.system.serviceManager == "runit";
 assert rejects { system.serviceManager = "nosh"; };
+assert builtins.all (
+  backend:
+  rejects {
+    system.serviceManager = backend;
+    services.runit.legacy.process.argv = [ "/system/bin/true" ];
+  }
+) backends;
 assert builtins.all
   (
     backend:
     rejects {
       system.serviceManager = backend;
-      services.runit.nns-dispatcher.process.argv = [ "/system/bin/true" ];
+      system.services.nns-dispatcher.process.argv = [ "/system/bin/true" ];
     }
   )
   [
@@ -49,7 +56,7 @@ assert builtins.all (
   backend:
   rejects {
     system.serviceManager = backend;
-    services.runit.invalid = {
+    system.services.invalid = {
       process.argv = [ "/system/bin/true" ];
       nns.after = [ "missing" ];
     };

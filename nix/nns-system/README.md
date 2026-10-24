@@ -6,7 +6,9 @@ NNS selects one service manager for the whole system. Android init remains PID 1
 system.serviceManager = "runit"; # Default. Alternatives: "s6-rc", "dinit".
 ```
 
-The existing `services.runit` collection applies to every backend. Its name stays unchanged for compatibility. Built-in services, directory resources, namespace entry, and account records use the selected backend.
+`system.services.<name>` declares services for the selected backend. Built-in services and generated directory actions use this collection too. Higher-level options such as `services.openssh` remain separate.
+
+The old `services.runit` option is removed. Rename it to `system.services`. Old declarations fail evaluation with a migration message. Existing built generations remain usable.
 
 ## Migration and rollback
 

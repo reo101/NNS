@@ -74,7 +74,9 @@ Activation restarts the daemon when group membership changes. Trust changes appl
 
 `nix.package` selects Nix for the daemon and administrative system profile. It defaults to `pkgs.nix`. Set `nix.package = pkgs.nixVersions.latest` to select the latest package.
 
-`nix.settings` supplies daemon configuration. `services.runit.<name>` accepts nixpkgs portable service modules with `process.argv` and `process.environment`. Its NNS options are `nns.enable`, `nns.type = "longrun" | "oneshot"`, `nns.startAt = "boot" | "unlock"`, and `nns.after`.
+`nix.settings` supplies daemon configuration. `system.services.<name>` accepts nixpkgs portable service modules with `process.argv` and `process.environment`. Its NNS options are `nns.enable`, `nns.type = "longrun" | "oneshot"`, `nns.startAt = "boot" | "unlock"`, and `nns.after`.
+
+`system.serviceManager` selects `"runit"` (the default), `"s6-rc"`, or `"dinit"`. The old `services.runit` path is removed, not an alias. Rename existing declarations to `system.services`. Higher-level options such as `services.openssh` keep their names. See [service managers](../nix/nns-system/README.md) for backend migration and rollback.
 
 Service executables use store paths or Android system binaries. Root service PATH never includes an app profile. Nested services, `configData`, reload commands, notification protocols, and service PATH overrides are rejected. Dependencies must be enabled and acyclic.
 
@@ -85,7 +87,7 @@ Each published profile contains `bin` and `etc/nns/environment`. The environment
 Long-running services use `nns.type = "longrun"`, the default. Finite jobs use `nns.type = "oneshot"`:
 
 ```nix
-services.runit.prepare-cache = {
+system.services.prepare-cache = {
   nns.type = "oneshot";
   process.argv = [ "${pkgs.coreutils}/bin/mkdir" "-p" "/data/nix/var/cache" ];
 };
@@ -135,7 +137,7 @@ imports = [ inputs.nns.nixOnDroidModules.nns ];
 nns.enable = true;
 ```
 
-The NoD module always consumes an independent NNS system. It has no daemon settings or root-service options. Declare those in the NNS host with `nix.settings`, `services.openssh`, and `services.runit`. Activate NNS before NoD so the daemon and delegated profile directory exist.
+The NoD module always consumes an independent NNS system. It has no daemon settings or root-service options. Declare those in the NNS host with `nix.settings`, `services.openssh`, and `system.services`. Activate NNS before NoD so the daemon and delegated profile directory exist.
 
 The NNS daemon owns cache URLs and trusted public keys. Do not repeat those settings in NoD's per-user `nix.conf`. Overrides for restricted settings or unapproved caches cause warnings without granting the app trust.
 

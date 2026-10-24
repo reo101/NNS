@@ -56,15 +56,14 @@ let
   ) cfg.environment.profiles;
   nativeBackend = cfg.system.serviceManager != "runit";
   nativeRuntimePackages =
-    if cfg.system.serviceManager == "s6-rc" then
-      [
+    {
+      s6-rc = [
         pkgs.s6
         pkgs.s6-rc
-      ]
-    else if cfg.system.serviceManager == "dinit" then
-      [ pkgs.dinit ]
-    else
-      [ ];
+      ];
+      dinit = [ pkgs.dinit ];
+    }
+    .${cfg.system.serviceManager} or [ ];
   infrastructure = import ../system-profile.nix {
     phonePkgs = pkgs;
     nixPackage = cfg.nix.package;
@@ -141,7 +140,7 @@ let
       export HOME=${lib.escapeShellArg cfg.accounts.root.home}
       export TMPDIR=/data/nix/tmp
       export NIX_CONF_DIR=${lib.escapeShellArg cfg.system.nixConfDirectory}
-      ${lib.optionalString (service.nns.type == "oneshot") ''
+      ${lib.optionalString (service.nns.type == "oneshot") /* bash */ ''
         cd ${lib.escapeShellArg "${state}/services/${name}"}
         rm -f completed down exit-status
       ''}
@@ -151,11 +150,11 @@ let
       ${lib.concatMapStrings (
         dependency:
         if enabledServices.${dependency}.nns.type == "oneshot" then
-          ''
+          /* bash */ ''
             until [ -f ${lib.escapeShellArg "${state}/services/${dependency}/completed"} ]; do sleep 1; done
           ''
         else
-          ''
+          /* bash */ ''
             until sv status ${lib.escapeShellArg "${state}/services/${dependency}"} 2>/dev/null | grep -q '^run:'; do sleep 1; done
           ''
       ) service.nns.after}
@@ -184,8 +183,8 @@ let
       ${lib.optionalString (
         cfg.system.serviceManager == "dinit"
       ) "exec >>${lib.escapeShellArg "${state}/supervisor.log"} 2>&1"}
-      ${lib.optionalString (name == "nix-daemon") /* bash */ "# Configuration dependency: ${etc}"}
-      ${lib.optionalString (name == "sshd") /* bash */ "# Configuration dependency: ${sshdConfig}"}
+      ${lib.optionalString (name == "nix-daemon") "# Configuration dependency: ${etc}"}
+      ${lib.optionalString (name == "sshd") "# Configuration dependency: ${sshdConfig}"}
       # NNS start phase: ${service.nns.startAt}
       ${lib.concatMapStrings (
         dependency: "# NNS dependency: ${dependency} (${enabledServices.${dependency}.nns.type})\n"
@@ -197,12 +196,12 @@ let
       cd ${lib.escapeShellArg "${state}/services/${name}"}
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (
-          key: value: if value == null then "unset ${key}" else "export ${key}=${lib.escapeShellArg value}"
+          key: value: if value == null then /* bash */ "unset ${key}" else /* bash */ "export ${key}=${lib.escapeShellArg value}"
         ) service.process.environment
       )}
       ${
         if service.nns.type == "oneshot" then
-          ''
+          /* bash */ ''
             rm -f completed exit-status
             set +e
             ${lib.escapeShellArgs service.process.argv}
@@ -214,7 +213,7 @@ let
             exit "$status"
           ''
         else
-          ''
+          /* bash */ ''
             exec ${lib.escapeShellArgs service.process.argv}
           ''
       }
@@ -261,7 +260,7 @@ let
         cp -r ${nativeServiceDefinitions.package}/. "$out/"
         ${
           if cfg.system.serviceManager == "dinit" then
-            ''
+            /* bash */ ''
               chmod u+w "$out/services"
               printf 'type = internal\n' > "$out/services/nns-runtime"
             ''
@@ -269,7 +268,7 @@ let
             lib.concatStringsSep "\n" (
               lib.mapAttrsToList (
                 name: service:
-                lib.optionalString (service.nns.type == "longrun") ''
+                lib.optionalString (service.nns.type == "longrun") /* bash */ ''
                   chmod u+w "$out/source/svc-${name}"
                   printf '10000\n' > "$out/source/svc-${name}/timeout-down"
                 ''
@@ -289,11 +288,10 @@ let
     && builtins.all (
       dependency: isBootService dependency (visited ++ [ name ])
     ) enabledServices.${name}.nns.after;
-  nativeBootServices =
-    if nativeGraph ? result then
-      map (name: "svc-${name}") (builtins.filter (name: isBootService name [ ]) nativeGraph.result)
-    else
-      [ ];
+  nativeBootServices = lib.pipe (nativeGraph.result or [ ]) [
+    (lib.filter (name: isBootService name [ ]))
+    (lib.map (name: "svc-${name}"))
+  ];
   directoryType = types.submodule (
     { config, ... }: {
       options = {
@@ -403,14 +401,16 @@ let
       ) cfg.accounts
     )}
     nix-trusted:x:${builtins.toString nixTrustedGroupGid}:${
-      lib.concatStringsSep "," (
-        builtins.attrNames (lib.filterAttrs (_: account: account.nixTrusted) cfg.accounts)
-      )
+      lib.pipe cfg.accounts [
+        (lib.filterAttrs (_: account: account.nixTrusted))
+        lib.attrNames
+        (lib.concatStringsSep ",")
+      ]
     }
     EOF
     cat > "$out/nix/nix.conf" <<'EOF'
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (
+    ${lib.pipe cfg.nix.settings [
+      (lib.mapAttrsToList (
         key: value:
         "${key} = ${
           if builtins.isBool value then
@@ -420,8 +420,9 @@ let
           else
             builtins.toString value
         }"
-      ) cfg.nix.settings
-    )}
+      ))
+      (lib.concatStringsSep "\n")
+    ]}
     EOF
     printf '%s\n' 'nameserver 1.1.1.1' > "$out/resolv.conf"
     ln -s ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt "$out/ssl/certs/ca-certificates.crt"
@@ -430,45 +431,52 @@ let
     mkdir -p "$out/profiles" "$out/services" "$out/authorized_keys"
     ln -s ${infrastructure} "$out/system-profile"
     ln -s ${etc} "$out/etc"
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: profile: ''ln -s ${profile} "$out/profiles/${name}"'') profiles
-    )}
+    ${lib.pipe profiles [
+      (lib.mapAttrsToList (name: profile: ''ln -s ${profile} "$out/profiles/${name}"''))
+      (lib.concatStringsSep "\n")
+    ]}
     ${
       if nativeBackend then
-        ''
+        /* bash */ ''
           ln -s ${nativeServicePackage} "$out/service-definitions"
           printf '%s\n' ${lib.escapeShellArg cfg.system.serviceManager} > "$out/service-backend"
           printf '1\n' > "$out/service-protocol"
           printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" nativeBootServices)} > "$out/boot-services"
           printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" nativeServiceIds)} > "$out/all-services"
-          ${lib.concatStringsSep "\n" (
-            lib.mapAttrsToList (name: service: ''
-              mkdir -p "$out/services/${name}"
-              ln -s ${renderNativeAction name service} "$out/services/${name}/run"
-              ${lib.optionalString (service.nns.type == "oneshot") ''
-                touch "$out/services/${name}/oneshot"
-                ln -s ${renderFinish name} "$out/services/${name}/finish"
-              ''}
-            '') enabledServices
-          )}
+          ${lib.pipe enabledServices [
+            (lib.mapAttrsToList (
+              name: service: /* bash */ ''
+                mkdir -p "$out/services/${name}"
+                ln -s ${renderNativeAction name service} "$out/services/${name}/run"
+                ${lib.optionalString (service.nns.type == "oneshot") /* bash */ ''
+                  touch "$out/services/${name}/oneshot"
+                  ln -s ${renderFinish name} "$out/services/${name}/finish"
+                ''}
+              ''
+            ))
+            (lib.concatStringsSep "\n")
+          ]}
         ''
       else
-        ''
-          ${lib.concatStringsSep "\n" (
-            lib.mapAttrsToList (name: service: ''
-              mkdir -p "$out/services/${name}"
-              ln -s ${renderService name service} "$out/services/${name}/run"
-              ${lib.optionalString (service.nns.type == "oneshot") ''
-                touch "$out/services/${name}/oneshot"
-                ln -s ${renderFinish name} "$out/services/${name}/finish"
-              ''}
-            '') enabledServices
-          )}
+        /* bash */ ''
+          ${lib.pipe enabledServices [
+            (lib.mapAttrsToList (
+              name: service: /* bash */ ''
+                mkdir -p "$out/services/${name}"
+                ln -s ${renderService name service} "$out/services/${name}/run"
+                ${lib.optionalString (service.nns.type == "oneshot") /* bash */ ''
+                  touch "$out/services/${name}/oneshot"
+                  ln -s ${renderFinish name} "$out/services/${name}/finish"
+                ''}
+              ''
+            ))
+            (lib.concatStringsSep "\n")
+          ]}
           printf 'runit\n' > "$out/service-backend"
           printf '1\n' > "$out/service-protocol"
         ''
     }
-    cat > "$out/service-control" <<'EOF'
+    cat > "$out/service-control" <<'BASH'
     #!${pkgs.runtimeShell}
     set -eu
     generation=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
@@ -478,17 +486,18 @@ let
     export NNS_LAUNCHER=${lib.escapeShellArg cfg.system.launcher}
     export NNS_S6_RUNTIME=${./service-s6-rc.sh}
     exec ${pkgs.runtimeShell} ${./service-runtime.sh} "$generation" "$@"
-    EOF
+    BASH
     chmod 755 "$out/service-control"
-    ${lib.concatStringsSep "\n" (
-      lib.mapAttrsToList (name: file: ''ln -s ${file} "$out/authorized_keys/${name}"'') keyFiles
-    )}
-    ${lib.optionalString cfg.services.openssh.enable ''
+    ${lib.pipe keyFiles [
+      (lib.mapAttrsToList (name: file: /* bash */ ''ln -s ${file} "$out/authorized_keys/${name}"''))
+      (lib.concatStringsSep "\n")
+    ]}
+    ${lib.optionalString cfg.services.openssh.enable /* bash */ ''
       touch "$out/sshd-enabled"
       ln -s ${sshdConfig} "$out/sshd_config"
       ln -s ${checkSshd} "$out/check-sshd"
     ''}
-    cat > "$out/activate" <<'EOF'
+    cat > "$out/activate" <<'BASH'
     #!${pkgs.runtimeShell}
     set -eu
     generation=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
@@ -500,7 +509,7 @@ let
     export NNS_LAUNCHER=${lib.escapeShellArg cfg.system.launcher}
     export NNS_SERVICE_RUNTIME=${lib.escapeShellArg "${./service-runtime.sh}"}
     exec ${pkgs.runtimeShell} ${./activate.sh} "$generation" "''${1:-switch}"
-    EOF
+    BASH
     chmod 755 "$out/activate"
   '';
 in

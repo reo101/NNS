@@ -1,5 +1,14 @@
 # shellcheck shell=sh
 # shellcheck disable=SC2154 # Parent runtime supplies these globals.
+
+# A failed update must not leave the dispatcher paused. A paused dispatcher hides
+# native state from the next activation and from operator control tools, so the
+# retry starts from an inconsistent tree. Restore both policy processes instead.
+resume_after_failure() {
+    [ -d "$runtime/scan" ] || return 0
+    "$sp/bin/s6-svc" -U "$runtime/scan/svc-nns-dispatcher" 2>/dev/null || :
+    "$sp/bin/s6-svc" -U "$runtime/scan/s6rc-oneshot-runner" 2>/dev/null || :
+}
 backend_preflight() {
     [ "$(cat "$generation/service-backend" 2>/dev/null)" = s6-rc ] || fail 'generation does not select s6-rc'
     [ -d "$generation/service-definitions/source" ] || fail 'missing s6-rc source definitions'
@@ -77,6 +86,7 @@ backend_activate() {
     fi
 
     "$sp/bin/s6-svc" -wD -T5000 -POK "$runtime/scan/svc-nns-dispatcher" || fail 'cannot pause NNS dispatcher'
+    native_resume=s6-rc
     "$sp/bin/s6-svc" -wD -T5000 -POK "$runtime/scan/s6rc-oneshot-runner" || fail 'cannot pause s6-rc oneshot runner'
     "$sp/bin/s6-svc" -wU -T5000 -U "$runtime/scan/s6rc-oneshot-runner" || fail 'cannot restart s6-rc oneshot runner'
 
@@ -113,7 +123,9 @@ backend_activate() {
         fi
     fi
 
-    if "$sp/bin/s6-rc-update" -l "$runtime/live" "$database"; then
+    # A dispatcher child can still hold the database lock during a transition.
+    # Wait for it instead of failing the update on a transient lock.
+    if "$sp/bin/s6-rc-update" -b -l "$runtime/live" "$database"; then
         update_status=0
     else
         update_status=$?
@@ -122,6 +134,7 @@ backend_activate() {
 
     "$sp/bin/s6-svc" -wU -T5000 -U "$runtime/scan/s6rc-oneshot-runner" || fail 'cannot re-enable s6-rc oneshot runner'
     "$sp/bin/s6-svc" -U "$runtime/scan/svc-nns-dispatcher" || fail 'cannot re-enable NNS dispatcher'
+    native_resume=
     remove_obsolete_services
 }
 

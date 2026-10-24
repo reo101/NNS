@@ -1,6 +1,26 @@
 #!/bin/sh
 set -eu
 fail() { printf 'nns services: %s\n' "$*" >&2; exit 1; }
+# A native reconciliation that aborts must restore the policy process. The
+# dispatcher is paused or stopped for a database switch, and leaving it stopped
+# hides native state from the next activation and from operator control tools.
+native_resume=
+updates=
+resume_policy_process() {
+    case ${native_resume:-} in
+        '') return 0;;
+        s6-rc) native_resume=; resume_after_failure;;
+        dinit) native_resume=; dinit_resume_after_failure;;
+        *) native_resume=;;
+    esac
+}
+service_exit_cleanup() {
+    status=$?
+    resume_policy_process
+    if [ -n "$updates" ] && [ -d "$updates" ]; then rm -rf -- "$updates"; fi
+    return "$status"
+}
+trap service_exit_cleanup EXIT
 [ "$(id -u)" -eq 0 ] || fail 'service control requires root'
 [ "$#" -ge 2 ] || fail 'usage: service-runtime.sh GENERATION preflight|activate|stop'
 generation=$1
@@ -144,7 +164,6 @@ invalidate_oneshots() {
 }
 prepare_changes() {
     updates=$(mktemp -d "$state/.service-update.XXXXXXXX")
-    trap 'rm -rf -- "$updates"' EXIT
     : > "$updates/changed"; : > "$updates/removed"; : > "$updates/finite"
     for directory in "$state/services"/*; do
         [ -d "$directory" ] || continue
@@ -267,6 +286,12 @@ runit_stop() {
     if [ "$#" -gt 0 ]; then sv -w 10 down "$@"; sv -w 10 exit "$@"; fi
 }
 dinit_control() { dinitctl --quiet --socket-path "$runtime/control" "$@"; }
+# A failed native reconciliation must leave the policy process running, or the
+# next activation inherits stopped services without a dispatcher to restart them.
+dinit_resume_after_failure() {
+    [ -d "$runtime/services" ] || return 0
+    dinit_control start --no-wait svc-nns-dispatcher 2>/dev/null || :
+}
 dinit_preflight() {
     "$sp/bin/dinit" --version >/dev/null || fail 'Dinit executable is unavailable'
     "$sp/bin/dinitctl" --version >/dev/null || fail 'Dinit control executable is unavailable'
@@ -285,6 +310,7 @@ dinit_activate() {
     fi
     if manager_running; then
         dinit_control stop --force --ignore-unstarted svc-nns-dispatcher
+        native_resume=dinit
         for list in changed finite removed; do
             while IFS= read -r identifier; do dinit_control stop --force --ignore-unstarted "$identifier"; done < "$updates/$list"
         done
@@ -310,6 +336,7 @@ dinit_activate() {
         while IFS= read -r identifier; do rm -f "$runtime/services/$identifier"; done < "$updates/removed"
         dinit_control reload svc-nns-dispatcher
         dinit_control start --no-wait svc-nns-dispatcher
+        native_resume=
     else
         # A prior-boot socket is not evidence of a live manager.
         rm -f "$runtime/control"
@@ -319,6 +346,7 @@ dinit_activate() {
     until dinit_control status svc-nns-dispatcher >/dev/null 2>&1; do
         attempts=$((attempts + 1)); [ "$attempts" -lt 10 ] || fail 'Dinit did not become available'; sleep 1
     done
+    native_resume=
     remove_obsolete_services
 }
 dinit_stop() {

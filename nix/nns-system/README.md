@@ -54,6 +54,8 @@ For s6-rc, the generation supplies source definitions. Preflight compiles a data
 
 For s6-rc cancellation, NNS freezes and terminates the dispatcher's process group, then the native oneshot runner's process group. It does not assume that terminating the `s6-rc` client cancels its finite actions. The native updater then switches databases. For Dinit, scripted startup is interruptible and native stop waits for completion or process-group termination.
 
+A failed native reconciliation restores the policy process before it exits. The dispatcher is re-enabled for s6-rc and Dinit, so the retry starts from a running manager instead of a stopped policy process. The s6-rc database update waits for a lock that a dispatcher child still holds, because a transient lock is not a failed update.
+
 Dinit has a processless internal `nns-runtime` service. It keeps the subordinate manager available when startup work finishes or an operator stops application services. It is not a worker for a finite action.
 
 If Dinit disappears unexpectedly during the same boot, activation fails rather than starting another manager over unknown surviving children. Reboot or account for those children before recovery. s6 retains per-service supervisors that its control tools can stop after scanner failure.

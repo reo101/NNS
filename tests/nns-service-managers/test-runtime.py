@@ -61,6 +61,48 @@ exec "$@"
             self.assertEqual(result.returncode, 0, result.stdout + '\n' + self.log_text())
         return result
 
+    def manager_state(self):
+        """Bounded native state dump for failure diagnostics."""
+        lines = []
+        runtime = self.state / 'managers' / self.backend
+        for name in ('live', 'scan'):
+            entry = runtime / name
+            if not entry.exists() and not entry.is_symlink():
+                continue
+            target = entry.resolve() if entry.is_symlink() else entry
+            lines.append(f'{name} -> {target}')
+            if name == 'scan' and target.is_dir():
+                for service in sorted(target.iterdir()):
+                    try:
+                        status = subprocess.run(
+                            [shutil.which('s6-svstat'), str(service)],
+                            capture_output=True, text=True, timeout=5).stdout.strip()
+                    except (OSError, subprocess.TimeoutExpired):
+                        status = 'unavailable'
+                    lines.append(f'  {service.name}: {status or "no state"}')
+        for service in sorted((self.state / 'services').glob('*')):
+            run = service / 'run'
+            marker = ' pending-update' if (service / 'pending-update').exists() else ''
+            target = os.readlink(run) if run.is_symlink() else 'absent'
+            lines.append(f'service {service.name}: run={target}{marker}')
+        return '\n'.join(lines)
+
+    def native_policy_running(self):
+        """A failed native reconciliation must leave the policy process running."""
+        if self.backend == 'runit':
+            return True
+        runtime = self.state / 'managers' / self.backend
+        if self.backend == 's6-rc':
+            result = subprocess.run(
+                [shutil.which('s6-svstat'), str(runtime / 'scan/svc-nns-dispatcher')],
+                capture_output=True, text=True, timeout=10)
+            return result.stdout.startswith('up')
+        result = subprocess.run(
+            [shutil.which('dinitctl'), '--quiet', '--socket-path', str(runtime / 'control'),
+             'is-started', 'svc-nns-dispatcher'],
+            capture_output=True, text=True, timeout=10)
+        return result.returncode == 0
+
     def wait_for(self, predicate, description, timeout=20):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -74,7 +116,8 @@ exec "$@"
                 processes.append(path.read_text().strip())
             except FileNotFoundError:
                 pass
-        self.fail(f'timed out waiting for {description}\n{self.log_text()}\n' + '\n'.join(processes))
+        self.fail(f'timed out waiting for {description}\n{self.log_text()}\n'
+                  f'{self.manager_state()}\n' + '\n'.join(processes))
 
     def log_text(self):
         path = self.state / 'supervisor.log'
@@ -339,6 +382,8 @@ exec "$@"
             command.chmod(0o755)
             result = self.activate(candidate, check=False)
             self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(self.native_policy_running(),
+                            'failed native reconciliation left the policy process stopped')
             pending = self.state / 'services/worker/pending-update'
             self.assertTrue(pending.exists(), 'failed update lost its restart intent')
             self.assertEqual((BASE / 'worker-version').read_text().strip(), 'base')

@@ -13,7 +13,10 @@ resume_policy_process() {
 }
 service_exit_cleanup() {
     status=$?
-    resume_policy_process
+    if ! resume_policy_process; then
+        printf 'nns services: failed to restore the policy process\n' >&2
+        [ "$status" -ne 0 ] || status=1
+    fi
     if [ -n "$updates" ] && [ -d "$updates" ]; then rm -rf -- "$updates"; fi
     return "$status"
 }
@@ -200,9 +203,9 @@ remove_obsolete_services() {
 # backend_activate, backend_stop, and backend_resume_after_failure. The
 # runtime owns locking, state validation, supervisor registration, and
 # generation publication.
-# shellcheck disable=SC1090
 controller=$generation/service-backend.sh
 [ -f "$controller" ] || fail 'generation has no service backend controller'
+# shellcheck disable=SC1090
 . "$controller"
 # A backend change must not inherit a legacy runit tree whose supervisors the
 # new backend cannot own. Only the first backend-aware activation is affected.

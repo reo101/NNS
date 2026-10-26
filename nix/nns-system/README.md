@@ -47,7 +47,7 @@ A live switch from an unversioned runit tree is rejected before configuration or
 
 Do not activate a legacy generation while a native backend runs. Its old activation script cannot stop that backend. It can start duplicate daemon or SSH processes. The protocol guard recognizes runtime state, not every generation in deployment history. Keep live rollback targets within the backend-aware release boundary.
 
-Backend-aware generations stop the current manager before starting its replacement. A failed stop aborts the handoff. The protected `manager-generation` link identifies the controller for the current or partially applied generation. Rollback uses that controller before restoring another backend. A `pending-update` marker retains unfinished native changes. Retrying the same generation repeats reconciliation rather than treating its intended command as already active.
+Backend-aware generations stop the current manager before starting its replacement. A failed stop aborts the handoff. The protected `manager-generation` link identifies the controller for the current or partially applied generation. Rollback uses that controller before restoring another backend. A `pending-update` marker retains unfinished changes. Retrying the same generation repeats reconciliation rather than treating its intended command as already active.
 
 Generation activation publishes configuration and profiles, then applies services. If activation fails after publication, the deployment tool must activate the previous supported generation. This remains the deployment tool's transaction, not an automatic transaction inside a service manager.
 
@@ -65,7 +65,7 @@ Every activation invalidates prior finite results and reapplies finite actions. 
 
 Native dependency ordering and successful finite state belong to s6-rc or Dinit. NNS does not use completion files as their dependency engine. The files under `state/services/<name>/` retain diagnostic completion and exit status. Native exit status records contain the shell command status, not runit's raw signal fields. Service output and dispatcher diagnostics append to `state/supervisor.log`.
 
-One internal dispatcher supplies the NNS retry and unlock policy for every backend. Before unlock, it requests only the boot dependency closure. A dependency on an unlock service also defers its dependent. Independent daemon startup does not wait for unlock. Runit readiness is a running process for a longrun and a completion record for a finite action; the dispatcher starts every service whose dependencies are ready in the same pass, so a failing branch never blocks an independent one. After the full startup transition succeeds, the dispatcher stops itself for s6-rc and Dinit. Runit keeps it resident, because that backend has no native operator channel to undo.
+One internal dispatcher supplies the NNS retry and unlock policy for every backend. Before unlock, it requests only the boot dependency closure. A dependency on an unlock service also defers its dependent. Independent daemon startup does not wait for unlock. Runit readiness is a running process for a longrun and a completion record for a finite action; the dispatcher starts every service whose dependencies are ready in the same pass, so a failing branch never blocks an independent one. After the full startup transition succeeds, the dispatcher stops itself for s6-rc and Dinit. Runit keeps its dispatcher resident but does not repeat a completed startup phase.
 
 During a pending s6-rc transition, its live database remains locked. A finite action that does not return can delay other native graph commands. Activation cancels the pending transition before updating the database. Finite actions must not detach from their native process group. Actions must tolerate interruption and retry.
 
@@ -79,7 +79,11 @@ For s6-rc, the generation supplies source definitions. Preflight compiles a data
 
 For s6-rc cancellation, NNS freezes and terminates the dispatcher's process group, then the native oneshot runner's process group. It does not assume that terminating the `s6-rc` client cancels its finite actions. The native updater then switches databases. For Dinit, scripted startup is interruptible and native stop waits for completion or process-group termination.
 
-A failed native reconciliation restores the policy process before it exits. The dispatcher is re-enabled for s6-rc and Dinit, so the retry starts from a running manager instead of a stopped policy process. Runit stops the dispatcher before it touches the service tree and starts it again afterwards, so a running instance never completes a phase against stale state. The s6-rc database update waits for a lock that a dispatcher child still holds, because a transient lock is not a failed update.
+Each backend stops or pauses its dispatcher during reconciliation. On failure, cleanup attempts to restore that process before the controller exits. If restoration also fails, the controller reports it and retains the original failure status. The s6-rc database update waits for a lock that a dispatcher child still holds.
+
+Runit activation waits up to ten seconds for a live dispatcher supervisor, then up to ten seconds for the dispatcher to start. A stale control FIFO does not satisfy this check. Activation does not wait for finite actions or Android unlock. Successful control commands are quiet. Failed commands report the operation, service, exit status, and captured output.
+
+Runit retains `pending-update` until reconciliation succeeds. Removed service directories first move to hidden `.retiring-<name>` paths under `state/services/`, which the scanner ignores. After shutdown succeeds, the controller deletes these directories. If shutdown fails, the directories and ownership records remain available for retry. A failed shutdown prevents a backend handoff.
 
 Dinit has a processless internal `nns-runtime` service. It keeps the subordinate manager available when startup work finishes or an operator stops application services. It is not a worker for a finite action.
 

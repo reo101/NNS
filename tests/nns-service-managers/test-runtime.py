@@ -90,7 +90,11 @@ exec "$@"
     def native_policy_running(self):
         """A failed native reconciliation must leave the policy process running."""
         if self.backend == 'runit':
-            return True
+            dispatcher = self.state / 'services/nns-dispatcher'
+            result = subprocess.run(
+                [str(self.generation / 'system-profile/bin/sv'), 'status', str(dispatcher)],
+                capture_output=True, text=True, timeout=10)
+            return result.returncode == 0 and result.stdout.startswith('run:')
         runtime = self.state / 'managers' / self.backend
         if self.backend == 's6-rc':
             result = subprocess.run(
@@ -445,6 +449,185 @@ exec "$@"
             self.wait_for(lambda: not running(pid), 'cancelled finite child')
             child_record.unlink()
             self.assert_owner()
+
+    def test_runit_delayed_dispatcher_supervision_retries(self):
+        if self.backend != 'runit':
+            self.skipTest('runit delayed supervisor recovery')
+        with tempfile.TemporaryDirectory(dir=BASE) as directory:
+            directory = Path(directory)
+            candidate = directory / 'generation'
+            shutil.copytree(self.generation, candidate, symlinks=True)
+            original_profile = (candidate / 'system-profile').resolve()
+            profile = directory / 'profile'
+            (profile / 'bin').mkdir(parents=True)
+            for entry in (original_profile / 'bin').iterdir():
+                (profile / 'bin' / entry.name).symlink_to(entry)
+            (profile / 'etc').symlink_to(original_profile / 'etc')
+            (candidate / 'system-profile').unlink()
+            (candidate / 'system-profile').symlink_to(profile)
+            original_sv = (original_profile / 'bin' / 'sv').resolve()
+            sv_wrapper = profile / 'bin' / 'sv'
+            sv_wrapper.unlink()
+            # Fail status check on nns-dispatcher twice, then forward to original.
+            fail_count_file = directory / '.sv-fail-count'
+            fail_count_file.write_text('0')
+            sv_wrapper.write_text(f'''#!{shutil.which("sh")}
+fail_file={fail_count_file}
+if [ "$1" = "status" ] && echo " $* " | grep -q 'nns-dispatcher'; then
+    count=$(cat "$fail_file")
+    if [ "$count" -lt 2 ]; then
+        echo $((count + 1)) > "$fail_file"
+        echo 'transient supervisor unavailable' >&2
+        exit 1
+    fi
+fi
+exec "{original_sv}" "$@"
+''')
+            sv_wrapper.chmod(0o755)
+            result = self.activate(candidate)
+            self.assertEqual(result.stdout, '', 'successful control operations must be quiet')
+            self.assertEqual(fail_count_file.read_text().strip(), '2')
+            self.assertTrue(self.native_policy_running(), 'dispatcher must be running after retry')
+            self.assert_owner()
+            self.activate(self.generation)
+
+    def test_runit_startup_command_failure_returns_error(self):
+        if self.backend != 'runit':
+            self.skipTest('runit startup failure')
+        with tempfile.TemporaryDirectory(dir=BASE) as directory:
+            directory = Path(directory)
+            candidate = directory / 'generation'
+            shutil.copytree(self.generations[('runit', 'update')], candidate, symlinks=True)
+            original_profile = (candidate / 'system-profile').resolve()
+            profile = directory / 'profile'
+            (profile / 'bin').mkdir(parents=True)
+            for entry in (original_profile / 'bin').iterdir():
+                (profile / 'bin' / entry.name).symlink_to(entry)
+            (profile / 'etc').symlink_to(original_profile / 'etc')
+            (candidate / 'system-profile').unlink()
+            (candidate / 'system-profile').symlink_to(profile)
+            original_sv = (original_profile / 'bin' / 'sv').resolve()
+            sv_wrapper = profile / 'bin' / 'sv'
+            sv_wrapper.unlink()
+            # Fail on start/up commands for dispatcher.
+            sv_wrapper.write_text(f'''#!{shutil.which("sh")}
+case " $* " in
+    *" up "*"/nns-dispatcher "|*" start "*"/nns-dispatcher ")
+        echo 'injected dispatcher start failure' >&2
+        exit 37
+        ;;
+esac
+exec "{original_sv}" "$@"
+''')
+            sv_wrapper.chmod(0o755)
+            result = self.activate(candidate, check=False)
+            self.assertNotEqual(result.returncode, 0, 'activation must fail on start error')
+            # Publication identifies the controller for the partially applied
+            # generation. Activation failure is not an automatic rollback.
+            self.assertEqual((self.state / 'manager-generation').resolve(), candidate)
+            self.assertIn('injected dispatcher start failure', result.stdout)
+            self.assertTrue((self.state / 'manager-process').exists())
+            pending = self.state / 'services/worker/pending-update'
+            self.assertTrue(pending.exists(), 'published command still needs reconciliation')
+            sv_wrapper.unlink()
+            sv_wrapper.symlink_to(original_sv)
+            self.activate(candidate)
+            self.wait_for(lambda: (BASE / 'worker-version').read_text().strip() == 'updated',
+                          'retry after failed dispatcher start')
+            self.assertFalse(pending.exists())
+            self.assert_owner()
+            self.activate(self.generation)
+
+    def test_runit_failed_stop_during_update_restores_dispatcher(self):
+        if self.backend != 'runit':
+            self.skipTest('runit failed update stop recovery')
+        (BASE / 'release').touch()
+        self.wait_for(lambda: (BASE / 'consumer-ready').exists(), 'active dependent')
+        with tempfile.TemporaryDirectory(dir=BASE) as directory:
+            directory = Path(directory)
+            candidate = directory / 'generation'
+            shutil.copytree(self.generations[(self.backend, 'update')], candidate, symlinks=True)
+            original_profile = (candidate / 'system-profile').resolve()
+            profile = directory / 'profile'
+            (profile / 'bin').mkdir(parents=True)
+            for entry in (original_profile / 'bin').iterdir():
+                (profile / 'bin' / entry.name).symlink_to(entry)
+            (profile / 'etc').symlink_to(original_profile / 'etc')
+            (candidate / 'system-profile').unlink()
+            (candidate / 'system-profile').symlink_to(profile)
+            original_sv = (original_profile / 'bin' / 'sv').resolve()
+            sv_wrapper = profile / 'bin' / 'sv'
+            sv_wrapper.unlink()
+            # Fail on stop of worker during update.
+            sv_wrapper.write_text(f'''#!{shutil.which("sh")}
+case "$*" in
+    *" down "*/worker)
+        exit 37
+        ;;
+esac
+exec "{original_sv}" "$@"
+''')
+            sv_wrapper.chmod(0o755)
+            result = self.activate(candidate, check=False)
+            self.assertNotEqual(result.returncode, 0, 'failed stop must fail activation')
+            self.assertTrue(self.native_policy_running(), 'dispatcher must remain running after failed stop')
+            pending = self.state / 'services/worker/pending-update'
+            self.assertTrue(pending.exists(), 'pending-update must be retained after failed stop')
+            self.assertEqual((BASE / 'worker-version').read_text().strip(), 'base', 'worker version must not change')
+            # Restore and retry with same candidate.
+            sv_wrapper.unlink()
+            sv_wrapper.symlink_to(original_sv)
+            self.activate(candidate)
+            self.wait_for(lambda: (BASE / 'worker-version').read_text().strip() == 'updated', 'same-generation retry succeeds')
+            self.assertFalse(pending.exists(), 'pending-update cleared after successful update')
+            self.assert_owner()
+            self.activate(self.generation)
+
+    def test_runit_failed_shutdown_handoff_preserves_records(self):
+        if self.backend != 'runit':
+            self.skipTest('runit failed handoff recovery')
+        with tempfile.TemporaryDirectory(dir=BASE) as directory:
+            directory = Path(directory)
+            candidate = directory / 'generation'
+            shutil.copytree(self.generation, candidate, symlinks=True)
+            original_profile = (candidate / 'system-profile').resolve()
+            profile = directory / 'profile'
+            (profile / 'bin').mkdir(parents=True)
+            for entry in (original_profile / 'bin').iterdir():
+                (profile / 'bin' / entry.name).symlink_to(entry)
+            (profile / 'etc').symlink_to(original_profile / 'etc')
+            (candidate / 'system-profile').unlink()
+            (candidate / 'system-profile').symlink_to(profile)
+            original_sv = (original_profile / 'bin/sv').resolve()
+            command = profile / 'bin/sv'
+            self.activate(candidate)
+            owner = (BASE / 'daemon-pids').read_text()
+            records = {name: (self.state / name).read_text()
+                       for name in ('supervisor.pid', 'manager-process')}
+            command.unlink()
+            command.write_text(f'''#!{shutil.which("sh")}
+case " $* " in
+    *" shutdown "*"/worker ") echo 'injected shutdown failure' >&2; exit 37;;
+esac
+exec "{original_sv}" "$@"
+''')
+            command.chmod(0o755)
+            try:
+                result = self.activate(self.generations[('s6-rc', 'base')], check=False)
+                self.assertNotEqual(result.returncode, 0, 'failed shutdown must prevent handoff')
+                self.assertIn('injected shutdown failure', result.stdout)
+                self.assertEqual((self.state / 'manager-generation').resolve(), candidate)
+                for name, value in records.items():
+                    self.assertEqual((self.state / name).read_text(), value)
+                self.assertTrue((self.state / 'services/worker').is_dir())
+                self.assertEqual((BASE / 'daemon-pids').read_text(), owner)
+                self.assertFalse((BASE / 'duplicate-owner').exists())
+            finally:
+                command.unlink()
+                command.symlink_to(original_sv)
+                # Finish the interrupted shutdown before restoring the baseline.
+                self.command([candidate / 'service-control', 'stop'])
+                self.activate(self.generation)
 
 
 def main():

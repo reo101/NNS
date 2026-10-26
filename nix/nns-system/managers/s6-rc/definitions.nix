@@ -8,7 +8,7 @@
   ...
 }:
 let
-  portable = import ../service-backends {
+  portable = import ../../../service-backends {
     inherit pkgs modules;
     backend = "s6-rc";
     compileS6Database = false;

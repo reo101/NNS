@@ -6,7 +6,7 @@
   ...
 }:
 let
-  portable = import ../service-backends {
+  portable = import ../../../service-backends {
     inherit pkgs modules;
     backend = "dinit";
   };

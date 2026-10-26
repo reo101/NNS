@@ -57,9 +57,9 @@ ln -sfn "$2" "$profile"
         (self.gen / 'authorized_keys').mkdir()
         (self.gen / 'authorized_keys/alice').write_text('ssh-ed25519 AAAA test\n')
         sources = Path(__file__).resolve().parents[1] / 'nix/nns-system'
-        (self.gen / 'service-protocol').write_text('1\n')
-        (self.gen / 'service-backend').write_text('runit\n')
-        (self.gen / 'service-backend.sh').symlink_to(sources / 'service-runit.sh')
+        (self.gen / 'service-manager').write_text('runit\n')
+        (self.gen / 'service-manager-controller.sh').symlink_to(sources / 'managers/runit/controller.sh')
+        (self.gen / 'service-manager-policy.sh').symlink_to(sources / 'managers/runit/policy.sh')
         control = self.gen / 'service-control'
         control.write_text(f'''#!/bin/sh
             exec sh {sources}/service-runtime.sh {self.gen} "$@"

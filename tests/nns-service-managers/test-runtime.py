@@ -339,7 +339,7 @@ exec "$@"
         with tempfile.TemporaryDirectory(dir=BASE) as directory:
             candidate = Path(directory) / 'generation'
             shutil.copytree(self.generation, candidate, symlinks=True)
-            (candidate / 'service-protocol').write_text('unsupported\n')
+            (candidate / 'service-manager').write_text('missing-manager\n')
             profiles = {p.name: os.readlink(p) for p in (BASE / 'profiles').iterdir() if p.is_symlink()}
             owner = (BASE / 'daemon-pids').read_text()
             result = self.activate(candidate, check=False)
@@ -413,24 +413,6 @@ exec "$@"
             self.assert_owner()
         finally:
             controller.write_text(original)
-
-    def test_legacy_bootstrap_is_required_before_native_switch(self):
-        if self.backend != 'runit':
-            self.skipTest('legacy adoption starts from runit')
-        (self.state / 'manager-generation').unlink()
-        (self.state / 'manager-process').unlink()
-        target = self.generations[('s6-rc', 'base')]
-        owner = (BASE / 'daemon-pids').read_text()
-        profiles = os.readlink(BASE / 'profiles/system-profile')
-        result = self.activate(target, check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('backend-aware runit', result.stdout)
-        self.assertEqual(os.readlink(BASE / 'profiles/system-profile'), profiles)
-        self.assertEqual((BASE / 'daemon-pids').read_text(), owner)
-        self.activate(self.generation)
-        self.assertEqual((BASE / 'daemon-pids').read_text(), owner)
-        self.activate(target)
-        self.assert_owner()
 
     def test_pending_finite_group_is_cancelled_before_update_and_handoff(self):
         if self.backend == 'runit':

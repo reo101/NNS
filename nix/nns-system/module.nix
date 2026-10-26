@@ -174,7 +174,6 @@ let
   dispatcherArgv = [
     "${pkgs.runtimeShell}"
     ./service-dispatch.sh
-    cfg.system.serviceManager
     state
   ];
   allServices = enabledServices // {
@@ -375,12 +374,12 @@ let
     mkdir -p "$out/profiles" "$out/services" "$out/authorized_keys"
     ln -s ${infrastructure} "$out/system-profile"
     ln -s ${etc} "$out/etc"
-    ln -s ${serviceManagerDefinition.controller} "$out/service-backend.sh"
+    ln -s ${serviceManagerDefinition.controller} "$out/service-manager-controller.sh"
+    ln -s ${serviceManagerDefinition.policy} "$out/service-manager-policy.sh"
     ${lib.optionalString (serviceDefinitions != null) ''
       ln -s ${serviceDefinitions} "$out/service-definitions"
     ''}
-    printf '%s\n' ${lib.escapeShellArg cfg.system.serviceManager} > "$out/service-backend"
-    printf '1\n' > "$out/service-protocol"
+    printf '%s\n' ${lib.escapeShellArg cfg.system.serviceManager} > "$out/service-manager"
     printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" bootServiceIds)} > "$out/boot-services"
     printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" serviceIds)} > "$out/all-services"
     ${lib.pipe runTreeServices [
@@ -441,11 +440,6 @@ let
 in
 {
   _class = "nns";
-  imports = [
-    (lib.mkRemovedOptionModule [ "services" "runit" ] ''
-      Use `system.services` for service declarations and `system.serviceManager` to select the backend.
-    '')
-  ];
   options = {
     assertions = mkOption {
       type = types.listOf types.unspecified;
@@ -474,21 +468,24 @@ in
       serviceManagers = mkOption {
         default = {
           runit = {
-            controller = ./service-runit.sh;
+            controller = ./managers/runit/controller.sh;
+            policy = ./managers/runit/policy.sh;
             render = null;
             runtimePackages = [ pkgs.runit ];
           };
           s6-rc = {
-            controller = ./service-s6-rc.sh;
-            render = import ./definitions-s6-rc.nix;
+            controller = ./managers/s6-rc/controller.sh;
+            policy = ./managers/s6-rc/policy.sh;
+            render = import ./managers/s6-rc/definitions.nix;
             runtimePackages = [
               pkgs.s6
               pkgs.s6-rc
             ];
           };
           dinit = {
-            controller = ./service-dinit.sh;
-            render = import ./definitions-dinit.nix;
+            controller = ./managers/dinit/controller.sh;
+            policy = ./managers/dinit/policy.sh;
+            render = import ./managers/dinit/definitions.nix;
             runtimePackages = [ pkgs.dinit ];
           };
         };
@@ -499,8 +496,15 @@ in
                 type = types.path;
                 description = ''
                   Shell implementation sourced by the runtime. It defines
-                  backend_preflight, backend_prepare, backend_activate,
-                  backend_stop, and backend_resume_after_failure.
+                  manager_preflight, manager_prepare, manager_activate,
+                  manager_stop, and manager_resume_after_failure.
+                '';
+              };
+              policy = mkOption {
+                type = types.path;
+                description = ''
+                  Shell implementation sourced by the policy process. It defines
+                  manager_apply and manager_complete.
                 '';
               };
               render = mkOption {
@@ -529,7 +533,7 @@ in
       services = mkOption {
         default = { };
         type = types.attrsOf serviceType;
-        description = "Backend-neutral service definitions managed by the selected NNS service manager.";
+        description = "Manager-neutral service definitions managed by the selected NNS service manager.";
       };
       build.toplevel = mkOption {
         type = types.package;

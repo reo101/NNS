@@ -9,7 +9,7 @@ updates=
 resume_policy_process() {
     [ -n "${resume_pending:-}" ] || return 0
     resume_pending=
-    backend_resume_after_failure
+    manager_resume_after_failure
 }
 service_exit_cleanup() {
     status=$?
@@ -41,18 +41,12 @@ check_directory() {
         [ "$((0$permissions & 022))" -eq 0 ] || fail "administrative directory is writable by another identity: $1"
     fi
 }
-backend_of() {
-    if [ -f "$1/service-backend" ]; then cat "$1/service-backend"; else printf 'runit\n'; fi
+manager_of() {
+    cat "$1/service-manager" 2>/dev/null
 }
-backend=$(backend_of "$generation")
-if [ -f "$generation/service-protocol" ]; then
-    [ "$(cat "$generation/service-protocol")" = 1 ] || fail 'unsupported candidate service protocol'
-    [ -x "$generation/service-control" ] || fail 'candidate service controller is missing'
-else
-    fail 'generation has no service protocol'
-fi
-case $backend in ''|*[!A-Za-z0-9_-]*) fail "invalid backend name: $backend";; esac
-runtime=$state/managers/$backend
+manager=$(cat "$generation/service-manager" 2>/dev/null) || fail 'generation has no service manager'
+case $manager in ''|*[!A-Za-z0-9_-]*) fail "invalid service manager name: $manager";; esac
+runtime=$state/managers/$manager
 for directory in "$generation" "$state" "${state%/*}" "$state/services" "$state/bin" "$state/managers" "$runtime"; do check_directory "$directory"; done
 for directory in "$state/services"/*; do
     if [ -e "$directory" ] || [ -L "$directory" ]; then check_directory "$directory"; fi
@@ -80,7 +74,7 @@ if [ -e "$state/manager-generation" ] || [ -L "$state/manager-generation" ]; the
     previous=$(readlink -f "$state/manager-generation")
     check_directory "$previous"
     check_directory "${previous%/*}"
-    [ -f "$previous/service-protocol" ] && [ "$(cat "$previous/service-protocol")" = 1 ] && [ -x "$previous/service-control" ] || fail 'unsupported previous service protocol'
+    [ -f "$previous/service-manager" ] && [ -x "$previous/service-control" ] || fail 'unsupported previous generation'
 fi
 # Include boot identity: a PID and its start time can both recur after reboot.
 process_identity() (
@@ -97,15 +91,10 @@ process_identity() (
 )
 manager_running() (
     [ -f "$state/supervisor.pid" ] || exit 1
+    [ -f "$state/manager-process" ] || exit 1
     pid=$(cat "$state/supervisor.pid")
     identity=$(process_identity "$pid") || exit 1
-    if [ -f "$state/manager-process" ]; then
-        [ "$(cat "$state/manager-process")" = "$pid $identity" ]
-    else
-        # Adopt only the legacy scanner for this exact administrative tree.
-        [ "$backend" = runit ] && grep -aq 'runsvdir' "/proc/$pid/cmdline" &&
-            tr '\000' '\n' < "/proc/$pid/cmdline" | grep -Fxq "$state/services"
-    fi
+    [ "$(cat "$state/manager-process")" = "$pid $identity" ]
 )
 start_supervisor() {
     # Transfer the lock only through registration. If activation dies after
@@ -152,7 +141,6 @@ wait_supervisor_exit() {
     done
 }
 publish_generation() {
-    [ -f "$generation/service-protocol" ] || return 0
     ln -s "$generation" "$state/.manager-generation.$$"
     mv -Tf "$state/.manager-generation.$$" "$state/manager-generation"
 }
@@ -199,48 +187,38 @@ publish_services() {
 remove_obsolete_services() {
     while IFS= read -r identifier; do rm -rf -- "$state/services/${identifier#svc-}"; done < "$updates/removed"
 }
-# The backend controller supplies backend_preflight, backend_prepare,
-# backend_activate, backend_stop, and backend_resume_after_failure. The
-# runtime owns locking, state validation, supervisor registration, and
-# generation publication.
-controller=$generation/service-backend.sh
-[ -f "$controller" ] || fail 'generation has no service backend controller'
+# The service manager supplies manager_preflight, manager_prepare,
+# manager_activate, manager_stop, and manager_resume_after_failure. The runtime
+# owns locking, state validation, supervisor registration, and publication.
+controller=$generation/service-manager-controller.sh
+[ -f "$controller" ] || fail 'generation has no service manager controller'
 # shellcheck disable=SC1090
 . "$controller"
-# A backend change must not inherit a legacy runit tree whose supervisors the
-# new backend cannot own. Only the first backend-aware activation is affected.
-require_no_legacy_state() {
-    [ -n "$previous" ] && return 0
-    [ ! -e "$state/supervisor.pid" ] || fail 'activate a backend-aware runit generation before changing backend'
-    for directory in "$state/services"/*; do
-        [ ! -e "$directory" ] || fail 'activate a backend-aware runit generation before changing backend'
-    done
-}
 preflight() {
-    backend_preflight
+    manager_preflight
 }
 case $operation in
     preflight) preflight;;
     activate)
         preflight
-        if [ -n "$previous" ] && [ "$(backend_of "$previous")" != "$backend" ]; then
+        if [ -n "$previous" ] && [ "$(manager_of "$previous")" != "$manager" ]; then
             "$previous/service-control" stop
             rm -f "$state/supervisor.pid" "$state/manager-process"
             rm -rf -- "$state/services"
             mkdir -m 700 "$state/services"
         fi
         publish_generation
-        backend_prepare
-        backend_activate
+        manager_prepare
+        manager_activate
         for entry in "$generation/services"/*; do
             [ ! -d "$entry" ] || rm -f "$state/services/${entry##*/}/pending-update"
         done
         ;;
     stop)
-        if [ -n "$previous" ] && [ "$(backend_of "$previous")" != "$backend" ]; then
+        if [ -n "$previous" ] && [ "$(manager_of "$previous")" != "$manager" ]; then
             "$previous/service-control" stop
         else
-            backend_stop
+            manager_stop
         fi
         rm -f "$state/supervisor.pid" "$state/manager-process"
         ;;

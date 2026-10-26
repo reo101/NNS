@@ -1,22 +1,21 @@
 # shellcheck shell=sh
-# shellcheck disable=SC2154 # Parent runtime supplies these globals.
+# shellcheck disable=SC2154 # Globals are shared with the parent runtime.
 
 # A failed update must not leave the dispatcher paused. A paused dispatcher hides
 # native state from the next activation and from operator control tools, so the
 # retry starts from an inconsistent tree. Restore both policy processes instead.
-backend_resume_after_failure() {
+manager_resume_after_failure() {
     [ -d "$runtime/scan" ] || return 0
     "$sp/bin/s6-svc" -U "$runtime/scan/svc-nns-dispatcher" 2>/dev/null || :
     "$sp/bin/s6-svc" -U "$runtime/scan/s6rc-oneshot-runner" 2>/dev/null || :
 }
-backend_prepare() {
+manager_prepare() {
     mkdir -p "$state/managers" "$runtime"; chmod 700 "$state/managers" "$runtime"
     prepare_changes
     publish_services
 }
-backend_preflight() {
-    require_no_legacy_state
-    [ "$(cat "$generation/service-backend" 2>/dev/null)" = s6-rc ] || fail 'generation does not select s6-rc'
+manager_preflight() {
+    [ "$(cat "$generation/service-manager" 2>/dev/null)" = s6-rc ] || fail 'generation does not select s6-rc'
     [ -d "$generation/service-definitions/source" ] || fail 'missing s6-rc source definitions'
     check_directory "$runtime/scan"
     if [ -e "$runtime/live" ] || [ -L "$runtime/live" ]; then
@@ -60,7 +59,7 @@ backend_preflight() {
     rmdir "$temporary" || fail 'cannot remove database staging directory'
 }
 
-backend_activate() {
+manager_activate() {
     definitions=$(readlink -f "$generation/service-definitions") || fail 'cannot resolve service definitions'
     database=$state/service-databases/db-${definitions##*/}
     [ -d "$database" ] && [ ! -L "$database" ] || fail "compiled database is missing: $database"
@@ -73,7 +72,7 @@ backend_activate() {
     check_directory "$runtime"
 
     if ! manager_running || [ ! -d "$runtime/live" ]; then
-        backend_stop || fail 'cannot clean stale s6-rc runtime'
+        manager_stop || fail 'cannot clean stale s6-rc runtime'
         invalidate_oneshots
         mkdir -p "$runtime/scan"
         check_directory "$runtime/scan"
@@ -144,7 +143,7 @@ backend_activate() {
     remove_obsolete_services
 }
 
-backend_stop() {
+manager_stop() {
     [ ! -L "$runtime" ] || fail 's6-rc runtime is a symlink'
     if [ ! -d "$runtime/scan" ]; then
         if [ -d "$runtime" ]; then

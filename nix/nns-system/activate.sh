@@ -72,7 +72,7 @@ exec 9>"$state.lock"
 flock 9
 export NNS_SERVICE_LOCKED=1
 mkdir -p "$state" "$etc_root" "$profiles" "$nix_conf" "$state/services" "$state/authorized_keys" "$root_home"
-# Refuse legacy app-owned service trees rather than following their links as root.
+# Refuse app-owned service trees rather than following their links as root.
 for directory in "$state/services" "$state/authorized_keys" "$etc_root/nix" "$etc_root/ssl" "$etc_root/ssl/certs"; do check_directory "$directory"; done
 chmod 755 "$state"
 chmod 700 "$state/services" "$state/authorized_keys" "$root_home"
@@ -91,7 +91,7 @@ service_control() {
     if [ -x "$generation/service-control" ]; then "$generation/service-control" "$1";
     else sh "${NNS_SERVICE_RUNTIME:-${0%/*}/service-runtime.sh}" "$generation" "$1"; fi
 }
-# Validate the selected backend, migration protocol and candidate database before
+# Validate the selected service manager and candidate database before
 # publishing configuration or profiles. This does not stop the current manager.
 service_control preflight
 

@@ -1,6 +1,6 @@
-# Portable service backends
+# Portable service managers
 
-This library renders Nixpkgs modular services for s6 with s6-rc, or Dinit. It does not depend on NNS, NixOS, Android, or a PID 1 replacement. It does not select the NNS runtime. The [NNS integration](../nns-system/README.md) selects and activates a backend separately.
+This library renders Nixpkgs modular services for s6 with s6-rc, or Dinit. It does not depend on NNS, NixOS, Android, or a PID 1 replacement. It does not select the NNS runtime. The [NNS integration](../nns-system/README.md) selects and activates a manager separately.
 
 The implementation uses the portable service schema from the supplied `pkgs`. It adds a small `lifecycle` extension for finite jobs, startup prerequisites, readiness descriptors, and startup timeouts. The managers own runtime state. Generated command wrappers contain no dependency waits or completion markers.
 
@@ -8,9 +8,9 @@ The implementation uses the portable service schema from the supplied `pkgs`. It
 
 ```nix
 let
-  result = import ./nix/service-backends {
+  result = import ./nix/portable-services {
     inherit pkgs;
-    backend = "s6-rc"; # Or "dinit".
+    manager = "s6-rc"; # Or "dinit".
     modules = [
       {
         services.prepare = {
@@ -35,14 +35,14 @@ The arguments are:
 | Argument | Meaning |
 |---|---|
 | `pkgs` | The package set that supplies the portable schema and manager packages. |
-| `backend` | `"s6-rc"` or `"dinit"`. |
+| `manager` | `"s6-rc"` or `"dinit"`. |
 | `modules` | Module definitions for a top-level `services` collection. |
 | `configurationDirectory` | Optional absolute directory for published `configData`. Required when enabled configuration files exist. |
 | `compileS6Database` | Default `true`. If `false`, emit s6-rc sources without compiling a database. |
 
 The result exposes `package`, `runtimePackages`, `manifest`, `config`, `options`, and `warnings`. Add `runtimePackages` to the containing system's tools. The package contains native definitions and is not itself an executable service manager.
 
-| Backend | Package contents |
+| Manager | Package contents |
 |---|---|
 | s6-rc | `source/`, `compiled/` unless source-only, `configuration/`, and `manifest.json`. |
 | Dinit | `services/` descriptions, `configuration/`, and `manifest.json`. |
@@ -106,7 +106,7 @@ The containing system must publish the staged tree into `configurationDirectory`
 
 ## Unsupported features
 
-The library rejects reload commands and reload signals, systemd-only readiness, readiness notifications on oneshots, invalid names, invalid environment keys, missing process prerequisites, and dependency cycles. It preserves service-level assertions and warnings, including nested declarations. If a process advertises both notification protocols, these backends select its s6 protocol.
+The library rejects reload commands and reload signals, systemd-only readiness, readiness notifications on oneshots, invalid names, invalid environment keys, missing process prerequisites, and dependency cycles. It preserves service-level assertions and warnings, including nested declarations. If a process advertises both notification protocols, these managers select its s6 protocol.
 
 There is no generic control daemon, activation engine, Android unlock watcher, credential manager, logging policy, or automatic database-update transaction. These are integration responsibilities, not hidden emulations in run scripts.
 
@@ -121,11 +121,11 @@ Nosh is deferred, not represented by an untested third renderer. [nosh-research.
 From the repository root, run:
 
 ```sh
-nix run --impure --file tests/service-backends/default.nix tests -L
+nix run --impure --file tests/portable-services/default.nix tests -L
 ```
 
 The runner uses the repository's pinned Nixpkgs. Evaluation tests cover invalid declarations and nested schema composition. Generated definitions pass `s6-rc-compile` or `dinit-check` during the build.
 
-The runtime suite passes 18 cases across both actual managers. Empty collections also build for both backends. The shared contract covers finite success and failure, explicit retry, independent service startup, repeated start, raw arguments and flags, environment removal, literal environment values, configuration text and file sources, ownership paths, descriptor-5 readiness, readiness timeout, repeated process exits, and explicit stop/start.
+The runtime suite passes 18 cases across both actual managers. Empty collections also build for both managers. The shared contract covers finite success and failure, explicit retry, independent service startup, repeated start, raw arguments and flags, environment removal, literal environment values, configuration text and file sources, ownership paths, descriptor-5 readiness, readiness timeout, repeated process exits, and explicit stop/start.
 
 The runtime suite uses private user, mount, and PID namespaces. It mounts a private `/tmp` for configuration publication and contains all descendants. It requires Linux user namespaces, not host root. No device access or NNS deployment is part of these tests.

@@ -1,4 +1,4 @@
-{ pkgs, backend }:
+{ pkgs, manager }:
 let
   inherit (pkgs) lib;
   capture = pkgs.writeText "portable-service-capture.py" ''
@@ -13,17 +13,17 @@ let
         "unset": "PORTABLE_UNSET" not in os.environ,
         "uid_environment": os.environ["UID"],
     }
-    (pathlib.Path(os.environ["BACKEND_TEST_DIRECTORY"]) / "environment.json").write_text(json.dumps(result))
+    (pathlib.Path(os.environ["MANAGER_TEST_DIRECTORY"]) / "environment.json").write_text(json.dumps(result))
   '';
   finite =
     filename:
     pkgs.writeShellScript "portable-test-${filename}" ''
-      printf 'run\n' >> "$BACKEND_TEST_DIRECTORY/${filename}"
+      printf 'run\n' >> "$MANAGER_TEST_DIRECTORY/${filename}"
     '';
 in
-import ../../nix/service-backends {
-  inherit pkgs backend;
-  configurationDirectory = "/tmp/portable-service-backend-configuration";
+import ../../nix/portable-services {
+  inherit pkgs manager;
+  configurationDirectory = "/tmp/portable-service-manager-configuration";
   modules = [
     {
       services = {
@@ -31,8 +31,8 @@ import ../../nix/service-backends {
           lifecycle.type = "oneshot";
           process.argv = [
             (pkgs.writeShellScript "portable-test-prepare" ''
-              printf 'attempt\n' >> "$BACKEND_TEST_DIRECTORY/attempts"
-              test -f "$BACKEND_TEST_DIRECTORY/release"
+              printf 'attempt\n' >> "$MANAGER_TEST_DIRECTORY/attempts"
+              test -f "$MANAGER_TEST_DIRECTORY/release"
             '')
           ];
         };
@@ -40,7 +40,7 @@ import ../../nix/service-backends {
           lifecycle.requires = [ "prepare" ];
           process.argv = [
             (pkgs.writeShellScript "portable-test-consumer" ''
-              printf 'started\n' >> "$BACKEND_TEST_DIRECTORY/consumer"
+              printf 'started\n' >> "$MANAGER_TEST_DIRECTORY/consumer"
               exec ${lib.getExe' pkgs.coreutils "sleep"} 3600
             '')
           ];
@@ -53,7 +53,7 @@ import ../../nix/service-backends {
           lifecycle.type = "oneshot";
           process.argv = [
             (pkgs.writeShellScript "portable-service=literal" ''
-              printf 'executed\n' > "$BACKEND_TEST_DIRECTORY/literal-executable"
+              printf 'executed\n' > "$MANAGER_TEST_DIRECTORY/literal-executable"
             '')
           ];
         };
@@ -100,8 +100,8 @@ import ../../nix/service-backends {
           lifecycle.notificationFd = 5;
           process.argv = [
             (pkgs.writeShellScript "portable-test-ready" ''
-              touch "$BACKEND_TEST_DIRECTORY/starting"
-              until test -e "$BACKEND_TEST_DIRECTORY/ready"; do
+              touch "$MANAGER_TEST_DIRECTORY/starting"
+              until test -e "$MANAGER_TEST_DIRECTORY/ready"; do
                 ${lib.getExe' pkgs.coreutils "sleep"} 0.02
               done
               printf '\n' >&5
@@ -122,7 +122,7 @@ import ../../nix/service-backends {
           lifecycle.startTimeout = 1;
           process.argv = [
             (pkgs.writeShellScript "portable-test-timeout" ''
-              touch "$BACKEND_TEST_DIRECTORY/timeout-starting"
+              touch "$MANAGER_TEST_DIRECTORY/timeout-starting"
               exec ${lib.getExe' pkgs.coreutils "sleep"} 2
             '')
           ];
@@ -138,11 +138,11 @@ import ../../nix/service-backends {
           process.argv = [
             (pkgs.writeShellScript "portable-test-restart" ''
               count=0
-              if test -e "$BACKEND_TEST_DIRECTORY/restarts"; then
-                count=$(cat "$BACKEND_TEST_DIRECTORY/restarts")
+              if test -e "$MANAGER_TEST_DIRECTORY/restarts"; then
+                count=$(cat "$MANAGER_TEST_DIRECTORY/restarts")
               fi
               count=$((count + 1))
-              printf '%s\n' "$count" > "$BACKEND_TEST_DIRECTORY/restarts"
+              printf '%s\n' "$count" > "$MANAGER_TEST_DIRECTORY/restarts"
               if test "$count" -lt 6; then exit "$((count % 2))"; fi
               exec ${lib.getExe' pkgs.coreutils "sleep"} 3600
             '')

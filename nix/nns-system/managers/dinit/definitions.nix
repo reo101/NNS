@@ -6,9 +6,9 @@
   ...
 }:
 let
-  portable = import ../../../service-backends {
+  portable = import ../../../portable-services {
     inherit pkgs modules;
-    backend = "dinit";
+    manager = "dinit";
   };
 in
 pkgs.runCommand "nns-service-definitions-dinit" { } ''

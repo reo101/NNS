@@ -12,7 +12,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
     # with the NNS launcher; pass it into `lib.nixOnDroidConfiguration`.
     flake.nixOnDroidModules.nns = import ./nix/nix-on-droid.nix;
     flake.lib.nnsSystem = import ./nix/nns-system.nix { nixpkgs = inputs.nixpkgs; };
-    flake.lib.evalPortableServices = import ./nix/service-backends;
+    flake.lib.evalPortableServices = import ./nix/portable-services;
     flake.nnsModules.default = import ./nix/nns-system/module.nix;
     # Data shared with consumers: the accepted binary caches, rendered into
     # the NixOS substituters module and the phone's staged nix.conf alike.

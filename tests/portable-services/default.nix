@@ -4,10 +4,10 @@
 let
   inherit (pkgs) lib;
   fixtures = lib.genAttrs [ "s6-rc" "dinit" ] (
-    backend: (import ./fixture.nix { inherit pkgs backend; }).package
+    manager: (import ./fixture.nix { inherit pkgs manager; }).package
   );
   empty = lib.genAttrs [ "s6-rc" "dinit" ] (
-    backend: (import ../../nix/service-backends { inherit pkgs backend; }).package
+    manager: (import ../../nix/portable-services { inherit pkgs manager; }).package
   );
   evaluation =
     assert import ./evaluation.nix { inherit pkgs; };
@@ -21,7 +21,7 @@ in
     s6-rc = pkgs.s6-rc.version;
   };
   tests = pkgs.writeShellApplication {
-    name = "test-portable-service-backends";
+    name = "test-portable-portable-services";
     runtimeInputs = with pkgs; [
       python3
       bash

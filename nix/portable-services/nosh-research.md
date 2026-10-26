@@ -1,6 +1,6 @@
-# Nosh backend feasibility
+# Nosh manager feasibility
 
-Nosh is not an implemented backend. Selecting it fails during evaluation. No nosh runtime test or Android compatibility test was performed.
+Nosh is not an implemented manager. Selecting it fails during evaluation. No nosh runtime test or Android compatibility test was performed.
 
 ## Package availability
 
@@ -20,11 +20,11 @@ The `remain` marker permits a service to remain considered running after its pro
 
 ## Readiness gap
 
-Nixpkgs declares process capabilities through `notificationProtocol.s6` and `notificationProtocol.systemd`. The implemented backends use the s6 protocol: a newline on a configured descriptor.
+Nixpkgs declares process capabilities through `notificationProtocol.s6` and `notificationProtocol.systemd`. The implemented managers use the s6 protocol: a newline on a configured descriptor.
 
 The reviewed nosh documentation does not establish native handling of that descriptor protocol. Its `ready_after_run` convention is not the same mechanism. Do not map notification-enabled longruns to process existence or silently ignore their capability declaration.
 
-A first nosh backend must either reject that capability or provide and test a readiness adapter. The shared runtime fixture explicitly tests descriptor-5 notification, so an untested renderer cannot claim parity.
+A first nosh manager must either reject that capability or provide and test a readiness adapter. The shared runtime fixture explicitly tests descriptor-5 notification, so an untested renderer cannot claim parity.
 
 ## Process scope and API
 

@@ -11,8 +11,8 @@ import time
 import unittest
 
 
-class BackendContract(unittest.TestCase):
-    backend = None
+class ManagerContract(unittest.TestCase):
+    manager = None
     package = None
 
     def setUp(self):
@@ -20,18 +20,18 @@ class BackendContract(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.manifest = json.loads((self.package / 'manifest.json').read_text())
         self.configuration = Path(self.manifest['configurationDirectory'])
-        self.environment = dict(os.environ, BACKEND_TEST_DIRECTORY=str(self.root),
+        self.environment = dict(os.environ, MANAGER_TEST_DIRECTORY=str(self.root),
                                 PORTABLE_UNSET='must be removed')
         self.log = open(self.root / 'manager.log', 'w+')
-        self.manager = None
+        self.process = None
         self.pending = []
         self.addCleanup(self.cleanup)
         shutil.copytree(self.package / 'configuration', self.configuration)
-        if self.backend == 's6-rc':
+        if self.manager == 's6-rc':
             self.scan = self.root / 'scan'
             self.scan.mkdir()
             self.live = self.root / 'live'
-            self.manager = subprocess.Popen(['s6-svscan', str(self.scan)], env=self.environment,
+            self.process = subprocess.Popen(['s6-svscan', str(self.scan)], env=self.environment,
                                            stdout=self.log, stderr=self.log, start_new_session=True)
             self.wait_for(lambda: (self.scan / '.s6-svscan/control').is_fifo(), 's6-svscan startup')
             result = self.execute(['s6-rc-init', '-t', '5000', '-c', str(self.package / 'compiled'),
@@ -42,7 +42,7 @@ class BackendContract(unittest.TestCase):
             control = self.root / 'control'
             control.mkdir()
             (control / 'boot').write_text('type = internal\n')
-            self.manager = subprocess.Popen(
+            self.process = subprocess.Popen(
                 ['dinit', '--user', '-p', str(self.socket), '-d', str(control),
                  '-d', str(self.package / 'services'), 'boot'], env=self.environment,
                 stdout=self.log, stderr=self.log, start_new_session=True)
@@ -59,7 +59,7 @@ class BackendContract(unittest.TestCase):
         while time.monotonic() < deadline:
             if predicate():
                 return
-            if self.manager is not None and self.manager.poll() is not None:
+            if self.process is not None and self.process.poll() is not None:
                 self.fail('manager exited during ' + description + '\n' + self.log_text())
             time.sleep(0.03)
         self.fail('timed out during ' + description + '\n' + self.log_text())
@@ -70,7 +70,7 @@ class BackendContract(unittest.TestCase):
 
     def command(self, action, name):
         native = self.manifest['services'][name]['nativeName']
-        if self.backend == 's6-rc':
+        if self.manager == 's6-rc':
             return ['s6-rc', '-l', str(self.live), '-u' if action == 'start' else '-d', 'change', native]
         return ['dinitctl', '-p', str(self.socket), action, native]
 
@@ -96,21 +96,21 @@ class BackendContract(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.communicate(timeout=3)
-            if self.manager is not None and self.manager.poll() is None:
-                if self.backend == 's6-rc':
+            if self.process is not None and self.process.poll() is None:
+                if self.manager == 's6-rc':
                     self.execute(['s6-rc', '-l', str(self.live), '-da', 'change'], timeout=5)
                     self.execute(['s6-svscanctl', '-t', str(self.scan)], timeout=5)
                 else:
                     self.execute(['dinitctl', '-p', str(self.socket), 'shutdown'], timeout=5)
                 try:
-                    self.manager.wait(timeout=5)
+                    self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(self.manager.pid, signal.SIGKILL)
-                    self.manager.wait(timeout=3)
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                    self.process.wait(timeout=3)
         finally:
-            if self.manager is not None and self.manager.poll() is None:
-                os.killpg(self.manager.pid, signal.SIGKILL)
-                self.manager.wait(timeout=3)
+            if self.process is not None and self.process.poll() is None:
+                os.killpg(self.process.pid, signal.SIGKILL)
+                self.process.wait(timeout=3)
             self.log.close()
             shutil.rmtree(self.configuration, ignore_errors=True)
             self.directory.cleanup()
@@ -203,15 +203,15 @@ def main():
     packages = [Path(path).resolve() for path in sys.argv[1:]]
     mapping = Path('/proc/self/uid_map').read_text().split()
     if os.getpid() != 1 or os.getuid() != 0 or len(mapping) != 3 or mapping[2] != '1':
-        raise SystemExit('run through tests/service-backends/default.nix; private PID and user namespaces are required')
+        raise SystemExit('run through tests/portable-services/default.nix; private PID and user namespaces are required')
     # The runner creates the mount namespace. Package and script paths are in /nix.
     subprocess.run(['mount', '--make-rprivate', '/'], check=True)
     subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=1777', 'tmpfs', '/tmp'], check=True)
     os.environ['TMPDIR'] = '/tmp'
     tempfile.tempdir = None
     suite = unittest.TestSuite()
-    for backend, package in zip(['s6-rc', 'dinit'], packages):
-        case = type(backend + 'Contract', (BackendContract,), {'backend': backend, 'package': package})
+    for manager, package in zip(['s6-rc', 'dinit'], packages):
+        case = type(manager + 'Contract', (ManagerContract,), {'manager': manager, 'package': package})
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(case))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

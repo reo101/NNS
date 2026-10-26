@@ -7,28 +7,28 @@ let
       true
     else
       !(builtins.tryEval
-        (import ../../nix/service-backends/s6-rc.nix {
+        (import ../../nix/portable-services/s6-rc.nix {
           pkgs = cross;
           services = { };
         }).drvPath
       ).success;
   crossSourceOnly =
     (builtins.tryEval
-      (import ../../nix/service-backends/s6-rc.nix {
+      (import ../../nix/portable-services/s6-rc.nix {
         pkgs = cross;
         services = { };
         compileDatabase = false;
       }).drvPath
     ).success;
   evaluate =
-    backend: definition:
-    import ../../nix/service-backends {
-      inherit pkgs backend;
+    manager: definition:
+    import ../../nix/portable-services {
+      inherit pkgs manager;
       modules = [ definition ];
     };
   rejects =
-    backend: definition:
-    !(builtins.tryEval (builtins.deepSeq (evaluate backend definition).manifest true)).success;
+    manager: definition:
+    !(builtins.tryEval (builtins.deepSeq (evaluate manager definition).manifest true)).success;
   command = [ "${pkgs.coreutils}/bin/true" ];
   service = {
     process.argv = command;
@@ -157,9 +157,9 @@ let
     }
   ];
   withConfiguration =
-    backend: directory: files:
-    import ../../nix/service-backends {
-      inherit pkgs backend;
+    manager: directory: files:
+    import ../../nix/portable-services {
+      inherit pkgs manager;
       configurationDirectory = directory;
       modules = [
         {
@@ -170,27 +170,27 @@ let
       ];
     };
   configurationRejects =
-    backend: directory: files:
-    !(builtins.tryEval (builtins.deepSeq (withConfiguration backend directory files).manifest true))
+    manager: directory: files:
+    !(builtins.tryEval (builtins.deepSeq (withConfiguration manager directory files).manifest true))
     .success;
-  checkBackend =
-    backend:
+  checkManager =
+    manager:
     let
-      nested = evaluate backend {
+      nested = evaluate manager {
         services.parent.services.child = service;
         services.parent-child = service;
         services.consumer = service // {
           lifecycle.requires = [ "parent/child" ];
         };
       };
-      conditional = evaluate backend { services.disabled = lib.mkIf false service; };
-      moduleArguments = evaluate backend {
+      conditional = evaluate manager { services.disabled = lib.mkIf false service; };
+      moduleArguments = evaluate manager {
         services.parent.services.child = { pkgs, ... }: {
           process.argv = [ "${pkgs.coreutils}/bin/true" ];
           process.environment.SERVICE_TOOL = pkgs.coreutils;
         };
       };
-      disabled = evaluate backend {
+      disabled = evaluate manager {
         services.example = service // {
           configData.unused = {
             enable = false;
@@ -198,7 +198,7 @@ let
           };
         };
       };
-      notification = evaluate backend {
+      notification = evaluate manager {
         services.example = service // {
           notificationProtocol = {
             s6 = true;
@@ -206,30 +206,30 @@ let
           };
         };
       };
-      configuration = withConfiguration backend "/tmp/portable-service-configuration" {
+      configuration = withConfiguration manager "/tmp/portable-service-configuration" {
         nested = {
           name = "nested/config.txt";
           text = "content";
         };
       };
     in
-    assert lib.assertMsg (builtins.all (rejects backend) invalid) (
-      "accepted invalid definitions for ${backend}: "
+    assert lib.assertMsg (builtins.all (rejects manager) invalid) (
+      "accepted invalid definitions for ${manager}: "
       + lib.concatStringsSep ", " (
         lib.imap0 (
-          index: definition: if rejects backend definition then "" else builtins.toString index
+          index: definition: if rejects manager definition then "" else builtins.toString index
         ) invalid
       )
     );
-    assert configurationRejects backend "relative" { };
-    assert configurationRejects backend "/tmp/../escaped" { };
-    assert configurationRejects backend "/tmp/valid" {
+    assert configurationRejects manager "relative" { };
+    assert configurationRejects manager "/tmp/../escaped" { };
+    assert configurationRejects manager "/tmp/valid" {
       invalid = {
         name = "../escaped";
         text = "content";
       };
     };
-    assert configurationRejects backend "/tmp/valid" {
+    assert configurationRejects manager "/tmp/valid" {
       first = {
         name = "same";
         text = "one";
@@ -260,7 +260,7 @@ assert crossRejected;
 assert crossSourceOnly;
 assert rejects "nosh" { services.example = service; };
 assert rejects "unknown" { services.example = service; };
-assert builtins.all checkBackend [
+assert builtins.all checkManager [
   "s6-rc"
   "dinit"
 ];

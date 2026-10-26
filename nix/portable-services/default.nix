@@ -1,6 +1,6 @@
 {
   pkgs,
-  backend,
+  manager,
   modules ? [ ],
   configurationDirectory ? null,
   compileS6Database ? true,
@@ -97,16 +97,16 @@ let
   failures =
     lib.optional
       (
-        !(builtins.elem backend [
+        !(builtins.elem manager [
           "s6-rc"
           "dinit"
         ])
       )
       (
-        if backend == "nosh" then
-          "nosh is deferred; see nix/service-backends/nosh-research.md"
+        if manager == "nosh" then
+          "nosh is deferred; see nix/portable-services/nosh-research.md"
         else
-          "unsupported backend: ${backend}"
+          "unsupported manager: ${manager}"
       )
     ++ lib.optional (
       configurationDirectory != null
@@ -231,14 +231,14 @@ let
       }
     ) active
   );
-  native = import (if backend == "s6-rc" then ./s6-rc.nix else ./dinit.nix) {
+  native = import (if manager == "s6-rc" then ./s6-rc.nix else ./dinit.nix) {
     inherit pkgs;
     services = normalized;
     compileDatabase = compileS6Database;
   };
   manifest = {
     schemaVersion = 1;
-    inherit backend configurationDirectory;
+    inherit manager configurationDirectory;
     containers = map (node: node.logicalName) containers;
     services = lib.listToAttrs (
       map (
@@ -252,7 +252,7 @@ let
     );
   };
   manifestFile = pkgs.writeText "portable-services-manifest.json" (builtins.toJSON manifest);
-  package = pkgs.runCommand "portable-services-${backend}" { } ''
+  package = pkgs.runCommand "portable-services-${manager}" { } ''
     mkdir -p "$out"
     cp -r ${native}/. "$out/"
     cp ${manifestFile} "$out/manifest.json"
@@ -270,7 +270,7 @@ builtins.deepSeq checkedNodes (
     lib.foldr lib.warn {
       inherit package manifest warnings;
       runtimePackages =
-        if backend == "s6-rc" then
+        if manager == "s6-rc" then
           [
             pkgs.s6
             pkgs.s6-rc

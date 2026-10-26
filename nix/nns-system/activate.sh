@@ -15,7 +15,7 @@ nix_conf=${NNS_NIX_CONF_DIRECTORY:-/data/nix/etc/nix}
 launcher=${NNS_LAUNCHER:-/data/nix/bin/nix-enter}
 # The entry point supplies this immutable PATH, never an application profile.
 export PATH="$sp/bin:/system/bin:/system/xbin"
-for tool in sh env tr rmdir nix nix-env sleep runsvdir sv flock install mv mkdir mktemp cp chmod chown stat readlink ln rm find grep cut cat nohup; do
+for tool in sh env tr rmdir nix nix-env sleep flock install mv mkdir mktemp cp chmod chown stat readlink ln rm find grep cut cat nohup; do
     command -v "$tool" >/dev/null 2>&1 || fail "missing system tool: $tool"
 done
 valid_name() { case $1 in [A-Za-z0-9]*) case $1 in *[!A-Za-z0-9_-]*) return 1;; *) return 0;; esac;; *) return 1;; esac; }

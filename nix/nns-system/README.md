@@ -11,12 +11,14 @@ system.serviceManager = "runit"; # Default. Alternatives: "s6-rc", "dinit".
 ```nix
 system.serviceManagers.<name> = {
   controller = ./service-<name>.sh; # Required. Sourced by the runtime.
+  render = import ./definitions-<name>.nix; # Optional. Manager definitions.
   runtimePackages = [ ]; # Optional. Supervision and control tools.
 };
 ```
 
-The runtime sources the controller of the selected generation. A controller defines five shell functions.
+`render` receives `{ pkgs, lib, services, modules }` and returns the manager definitions package. Runit keeps the default `null`, because it supervises the published run tree directly. The module builds `services/<name>/` for every backend from one shared action wrapper, which carries the environment, the working directory, and the finite-action body. The wrapper never waits for a dependency; ordering belongs to the manager or to the policy process.
 
+The runtime sources the controller of the selected generation. A controller defines five shell functions.
 | Function | Purpose |
 | --- | --- |
 | `backend_preflight` | Refuse an unusable candidate before publication |
@@ -27,7 +29,7 @@ The runtime sources the controller of the selected generation. A controller defi
 
 The runtime owns locking, state validation, supervisor registration, and generation publication. A controller owns manager-specific state under `state/managers/<name>/`.
 
-Rendering still follows the selected name. A new name needs a matching renderer. The controller hook removes backend names from the runtime, not from the renderer.
+The module and the runtime contain no backend names. A new manager needs one controller and, if it has its own definitions, one renderer.
 
 `system.services.<name>` declares services for the selected backend. Built-in services and generated directory actions use this collection too. Higher-level options such as `services.openssh` remain separate.
 
@@ -63,7 +65,7 @@ Every activation invalidates prior finite results and reapplies finite actions. 
 
 Native dependency ordering and successful finite state belong to s6-rc or Dinit. NNS does not use completion files as their dependency engine. The files under `state/services/<name>/` retain diagnostic completion and exit status. Native exit status records contain the shell command status, not runit's raw signal fields. Service output and dispatcher diagnostics append to `state/supervisor.log`.
 
-One internal dispatcher supplies the NNS retry and unlock policy that these backends do not provide. Before unlock, it requests only the boot dependency closure. A dependency on an unlock service also defers its dependent. Independent daemon startup does not wait for unlock. After the full startup transition succeeds, the dispatcher stops itself. It does not continually undo native operator stops.
+One internal dispatcher supplies the NNS retry and unlock policy for every backend. Before unlock, it requests only the boot dependency closure. A dependency on an unlock service also defers its dependent. Independent daemon startup does not wait for unlock. Runit readiness is a running process for a longrun and a completion record for a finite action; the dispatcher starts every service whose dependencies are ready in the same pass, so a failing branch never blocks an independent one. After the full startup transition succeeds, the dispatcher stops itself for s6-rc and Dinit. Runit keeps it resident, because that backend has no native operator channel to undo.
 
 During a pending s6-rc transition, its live database remains locked. A finite action that does not return can delay other native graph commands. Activation cancels the pending transition before updating the database. Finite actions must not detach from their native process group. Actions must tolerate interruption and retry.
 
@@ -77,7 +79,7 @@ For s6-rc, the generation supplies source definitions. Preflight compiles a data
 
 For s6-rc cancellation, NNS freezes and terminates the dispatcher's process group, then the native oneshot runner's process group. It does not assume that terminating the `s6-rc` client cancels its finite actions. The native updater then switches databases. For Dinit, scripted startup is interruptible and native stop waits for completion or process-group termination.
 
-A failed native reconciliation restores the policy process before it exits. The dispatcher is re-enabled for s6-rc and Dinit, so the retry starts from a running manager instead of a stopped policy process. The s6-rc database update waits for a lock that a dispatcher child still holds, because a transient lock is not a failed update.
+A failed native reconciliation restores the policy process before it exits. The dispatcher is re-enabled for s6-rc and Dinit, so the retry starts from a running manager instead of a stopped policy process. Runit stops the dispatcher before it touches the service tree and starts it again afterwards, so a running instance never completes a phase against stale state. The s6-rc database update waits for a lock that a dispatcher child still holds, because a transient lock is not a failed update.
 
 Dinit has a processless internal `nns-runtime` service. It keeps the subordinate manager available when startup work finishes or an operator stops application services. It is not a worker for a finite action.
 

@@ -1,8 +1,9 @@
 # The root-owned system profile: the nix daemon's own tooling plus the
-# helpers boot scripts and services call by name (runit, socat, ...).
+# helpers boot scripts and services call by name (socat, busybox, ...).
 # Delivered by nix/system-profile-deploy (atomic versioned flip with a
 # ping guard); NOT part of the module zip.
 #
+# Service manager tools enter through system.serviceManagers.<name>.runtimePackages.
 # Evaluated against the phone platform: pass `phonePkgs` scoped to
 # aarch64-linux (pkgsCross.aarch64-multiplatform).
 {
@@ -17,7 +18,6 @@ phonePkgs.buildEnv {
   paths = with phonePkgs;
     [
       nixPackage
-      runit
       socat
       busybox
       coreutils

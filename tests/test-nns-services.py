@@ -151,9 +151,10 @@ try:
     activate()
     assert not (services / 'prepare/oneshot').exists()
     assert not (services / 'prepare/finish').exists()
-    assert not (services / 'prepare/down').exists()
     assert not completed('prepare')
-    assert not stopped('prepare')
+    # The policy process starts the replacement after publication.
+    wait_for(lambda: not (services / 'prepare/down').exists() and not stopped('prepare'),
+             'longrun replacement did not start')
     (prepare / 'run').unlink()
     (prepare / 'run').symlink_to(original_run)
     (prepare / 'finish').symlink_to(original_finish)

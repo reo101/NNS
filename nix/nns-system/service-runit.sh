@@ -6,23 +6,28 @@
 backend_resume_after_failure() {
     :
 }
-# Runit state needs no preparation beyond the checks the runtime already ran.
 backend_preflight() {
-    :
+    command -v sv >/dev/null 2>&1 || fail 'runit control executable is unavailable'
+    [ -x "$sp/bin/runsvdir" ] || fail 'runit supervisor executable is unavailable'
 }
+# Runit publishes its own service tree; the generic change tracker is unused.
 backend_prepare() {
     :
 }
 backend_activate() {
     start_scanner=false
     if ! manager_running; then start_scanner=true; fi
+    # Stop the policy process before touching the tree. A running instance reads
+    # the published generation and would start services while they change.
+    dispatcher=$state/services/nns-dispatcher
+    if sv status "$dispatcher" >/dev/null 2>&1; then sv -w 10 down "$dispatcher" || :; fi
     for directory in "$state/services"/*; do
         [ -e "$directory" ] || continue
         check_directory "$directory"
         if [ ! -d "$generation/services/${directory##*/}" ]; then
-            if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-                sv -w 10 down "$directory"; sv -w 10 exit "$directory"
-            fi
+            : > "$directory/down"
+            sv -w 10 force-shutdown "$directory" >/dev/null 2>&1 || :
+            sv -w 10 exit "$directory" >/dev/null 2>&1 || :
             rm -rf -- "$directory"
         fi
     done
@@ -31,7 +36,7 @@ backend_activate() {
         [ -e "$entry" ] || continue
         directory=$state/services/${entry##*/}
         if [ -f "$entry/oneshot" ] || [ -f "$directory/oneshot" ]; then
-            if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then sv -w 10 down "$directory"; fi
+            if sv status "$directory" >/dev/null 2>&1; then sv -w 10 down "$directory" || :; fi
             rm -f "$directory/completed" "$directory/exit-status"
         fi
     done
@@ -54,12 +59,21 @@ backend_activate() {
             mv -Tf "$destination/.finish.$$" "$destination/finish"
         else
             rm -f "$destination/oneshot" "$destination/finish"
-            # A coordinated shutdown leaves down files for scanner safety.
-            if [ "$previous_oneshot" = true ] || [ "$start_scanner" = true ]; then rm -f "$destination/down"; fi
+            # A scanner start must not autostart anything except the policy
+            # process, which starts services in dependency order.
+            if [ "$start_scanner" = true ]; then
+                if [ "${entry##*/}" = nns-dispatcher ]; then
+                    rm -f "$destination/down"
+                else
+                    : > "$destination/down"
+                fi
+            fi
         fi
         if [ "$destination" != "$directory" ]; then mv -T "$destination" "$directory"; fi
-        if [ ! -f "$entry/oneshot" ] && { [ "$previous_run" != "$target" ] || [ "$previous_oneshot" = true ]; } && [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-            sv -w 10 restart "$directory"
+        # A changed longrun stops here. The policy process starts it again only
+        # when its dependencies are ready, so the change cannot bypass gating.
+        if [ ! -f "$entry/oneshot" ] && { [ "$previous_run" != "$target" ] || [ "$previous_oneshot" = true ]; } && sv status "$directory" >/dev/null 2>&1; then
+            sv -w 10 down "$directory" || :
         fi
     done
     if ! manager_running; then start_supervisor "$sp/bin/runsvdir" "$state/services"; fi
@@ -77,25 +91,20 @@ backend_activate() {
         printf '%s %s\n' "$pid" "$identity" > "$temporary"
         mv -Tf "$temporary" "$state/manager-process"
     fi
-    for entry in "$generation/services"/*; do
-        [ -f "$entry/oneshot" ] || continue
-        directory=$state/services/${entry##*/}; attempts=0
-        until sv status "$directory" >/dev/null 2>&1; do
-            attempts=$((attempts + 1)); [ "$attempts" -lt 10 ] || fail "oneshot is not supervised: ${entry##*/}"; sleep 1
-        done
-        sv up "$directory"
-    done
+    # The policy process starts every service, including finite actions. The
+    # scanner autostarts it at boot; a reapplication starts it here.
+    sv up "$state/services/nns-dispatcher" || :
 }
 backend_stop() {
     # Stop the scanner first: it must not recreate supervisors during teardown.
     if manager_running; then kill -TERM "$(cat "$state/supervisor.pid")"; wait_supervisor_exit; fi
-    set --
+    # Terminate every surviving supervisor. A failed status read must not leave
+    # a runsv alive after its directory is removed.
     for directory in "$state/services"/*; do
         [ -d "$directory" ] || continue
-        if [ -p "$directory/supervise/control" ] && sv status "$directory" >/dev/null 2>&1; then
-            : > "$directory/down"
-            set -- "$@" "$directory"
-        fi
+        [ -p "$directory/supervise/control" ] || continue
+        : > "$directory/down"
+        sv -w 10 force-shutdown "$directory" >/dev/null 2>&1 || :
+        sv -w 10 exit "$directory" >/dev/null 2>&1 || :
     done
-    if [ "$#" -gt 0 ]; then sv -w 10 down "$@"; sv -w 10 exit "$@"; fi
 }

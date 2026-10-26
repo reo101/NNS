@@ -149,6 +149,7 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
             ./tests/test-nns-boot.py
             ./nix/nns-system/activate.sh
             ./nix/nns-system/service-runtime.sh
+            ./nix/nns-system/service-runit.sh
             ./module/system-generation.sh
             ./module/stage-android-runtime.sh
           ];

@@ -54,7 +54,6 @@ let
       postBuild = ''mkdir -p "$out/bin"'';
     }
   ) cfg.environment.profiles;
-  nativeBackend = cfg.system.serviceManager != "runit";
   serviceManagerDefinition = cfg.system.serviceManagers.${cfg.system.serviceManager};
   infrastructure = import ../system-profile.nix {
     phonePkgs = pkgs;
@@ -121,41 +120,45 @@ let
       ];
     }).serviceSubmodule;
   enabledServices = lib.filterAttrs (_: service: service.nns.enable) cfg.system.services;
-  renderService =
+  renderAction =
     name: service:
-    pkgs.writeScript "nns-service-${name}" /* bash */ ''
-      #!${pkgs.runtimeShell}
+    pkgs.writeShellScript "nns-service-${name}" ''
       set -eu
-      ${lib.optionalString (name == "nix-daemon") /* bash */ "# Configuration dependency: ${etc}"}
-      ${lib.optionalString (name == "sshd") /* bash */ "# Configuration dependency: ${sshdConfig}"}
+      exec >>${lib.escapeShellArg "${state}/supervisor.log"} 2>&1
+      ${lib.optionalString (name == "nix-daemon") "# Configuration dependency: ${etc}"}
+      ${lib.optionalString (name == "sshd") "# Configuration dependency: ${sshdConfig}"}
+      # NNS start phase: ${service.nns.startAt}
+      ${lib.concatMapStrings (
+        dependency: "# NNS dependency: ${dependency} (${allServices.${dependency}.nns.type})\n"
+      ) service.nns.after}
       export PATH=${lib.escapeShellArg "${infrastructure}/bin:/system/bin:/system/xbin"}
       export HOME=${lib.escapeShellArg cfg.accounts.root.home}
       export TMPDIR=/data/nix/tmp
       export NIX_CONF_DIR=${lib.escapeShellArg cfg.system.nixConfDirectory}
-      ${lib.optionalString (service.nns.type == "oneshot") /* bash */ ''
-        cd ${lib.escapeShellArg "${state}/services/${name}"}
-        rm -f completed down exit-status
-      ''}
-      ${lib.optionalString (service.nns.startAt == "unlock") /* bash */ ''
-        until [ "$(/system/bin/getprop sys.user.0.ce_available)" = true ]; do sleep 5; done
-      ''}
-      ${lib.concatMapStrings (
-        dependency:
-        if enabledServices.${dependency}.nns.type == "oneshot" then
-          /* bash */ ''
-            until [ -f ${lib.escapeShellArg "${state}/services/${dependency}/completed"} ]; do sleep 1; done
-          ''
-        else
-          /* bash */ ''
-            until sv status ${lib.escapeShellArg "${state}/services/${dependency}"} 2>/dev/null | grep -q '^run:'; do sleep 1; done
-          ''
-      ) service.nns.after}
+      cd ${lib.escapeShellArg "${state}/services/${name}"}
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (
-          key: value: if value == null then /* bash */ "unset ${key}" else /* bash */ "export ${key}=${lib.escapeShellArg value}"
+          key: value: if value == null then "unset ${key}" else "export ${key}=${lib.escapeShellArg value}"
         ) service.process.environment
       )}
-      exec ${lib.escapeShellArgs service.process.argv}
+      ${
+        if service.nns.type == "oneshot" then
+          ''
+            rm -f completed exit-status
+            set +e
+            ${lib.escapeShellArgs service.process.argv}
+            status=$?
+            set -e
+            printf '%s\n' "$status" > ".exit-status.$$"
+            mv -Tf ".exit-status.$$" exit-status
+            if [ "$status" -eq 0 ]; then : > completed; fi
+            exit "$status"
+          ''
+        else
+          ''
+            exec ${lib.escapeShellArgs service.process.argv}
+          ''
+      }
     '';
   renderFinish =
     name:
@@ -168,119 +171,68 @@ let
         exec ${infrastructure}/bin/sv down .
       fi
     '';
-  renderNativeAction =
-    name: service:
-    pkgs.writeShellScript "nns-native-service-${name}" ''
-      set -eu
-      ${lib.optionalString (
-        cfg.system.serviceManager == "dinit"
-      ) "exec >>${lib.escapeShellArg "${state}/supervisor.log"} 2>&1"}
-      ${lib.optionalString (name == "nix-daemon") "# Configuration dependency: ${etc}"}
-      ${lib.optionalString (name == "sshd") "# Configuration dependency: ${sshdConfig}"}
-      # NNS start phase: ${service.nns.startAt}
-      ${lib.concatMapStrings (
-        dependency: "# NNS dependency: ${dependency} (${enabledServices.${dependency}.nns.type})\n"
-      ) service.nns.after}
-      export PATH=${lib.escapeShellArg "${infrastructure}/bin:/system/bin:/system/xbin"}
-      export HOME=${lib.escapeShellArg cfg.accounts.root.home}
-      export TMPDIR=/data/nix/tmp
-      export NIX_CONF_DIR=${lib.escapeShellArg cfg.system.nixConfDirectory}
-      cd ${lib.escapeShellArg "${state}/services/${name}"}
-      ${lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (
-          key: value: if value == null then /* bash */ "unset ${key}" else /* bash */ "export ${key}=${lib.escapeShellArg value}"
-        ) service.process.environment
-      )}
-      ${
-        if service.nns.type == "oneshot" then
-          /* bash */ ''
-            rm -f completed exit-status
-            set +e
-            ${lib.escapeShellArgs service.process.argv}
-            status=$?
-            set -e
-            printf '%s\n' "$status" > ".exit-status.$$"
-            mv -Tf ".exit-status.$$" exit-status
-            if [ "$status" -eq 0 ]; then : > completed; fi
-            exit "$status"
-          ''
-        else
-          /* bash */ ''
-            exec ${lib.escapeShellArgs service.process.argv}
-          ''
-      }
-    '';
-  nativeServiceDefinitions =
-    if !nativeBackend then
-      null
-    else
-      import ../service-backends {
-        inherit pkgs;
-        backend = cfg.system.serviceManager;
-        compileS6Database = false;
-        modules = [
-          {
-            services =
-              lib.mapAttrs (name: service: {
-                lifecycle = {
-                  type = service.nns.type;
-                  requires = service.nns.after;
-                  startTimeout = 0;
-                };
-                process.argv = [ (renderNativeAction name service) ];
-              }) enabledServices
-              // {
-                nns-dispatcher = {
-                  process.argv = [
-                    "${pkgs.runtimeShell}"
-                    ./service-dispatch.sh
-                    cfg.system.serviceManager
-                    state
-                  ];
-                  process.environment.PATH = "${infrastructure}/bin:/system/bin:/system/xbin";
-                };
-              };
-          }
-        ];
+  dispatcherArgv = [
+    "${pkgs.runtimeShell}"
+    ./service-dispatch.sh
+    cfg.system.serviceManager
+    state
+  ];
+  allServices = enabledServices // {
+    nns-dispatcher = {
+      nns = {
+        type = "longrun";
+        startAt = "boot";
+        after = [ ];
       };
-  nativeServicePackage =
-    if !nativeBackend then
+      process.argv = dispatcherArgv;
+      process.environment = { };
+    };
+  };
+  serviceNames = builtins.filter (name: name != "nns-dispatcher") (builtins.attrNames allServices);
+  serviceActions = lib.mapAttrs (name: service: {
+    action = renderAction name service;
+    finish = renderFinish name;
+    oneshot = service.nns.type == "oneshot";
+    inherit (service.nns) type after startAt;
+  }) allServices;
+  # Runit supervises the policy process from the published run tree. Native
+  # managers start it from their own definitions instead.
+  runTreeServices =
+    if serviceManagerDefinition.render == null then
+      serviceActions
+    else
+      lib.filterAttrs (name: _: name != "nns-dispatcher") serviceActions;
+  portableModules = [
+    {
+      services = lib.mapAttrs (name: service: {
+        lifecycle = {
+          type = service.nns.type;
+          requires = service.nns.after;
+          startTimeout = 0;
+        };
+        process.argv = if name == "nns-dispatcher" then dispatcherArgv else [ serviceActions.${name}.action ];
+      }) allServices;
+    }
+  ];
+  serviceDefinitions =
+    if serviceManagerDefinition.render == null then
       null
     else
-      pkgs.runCommand "nns-service-definitions-${cfg.system.serviceManager}" { } ''
-        mkdir -p "$out"
-        cp -r ${nativeServiceDefinitions.package}/. "$out/"
-        ${
-          if cfg.system.serviceManager == "dinit" then
-            /* bash */ ''
-              chmod u+w "$out/services"
-              printf 'type = internal\n' > "$out/services/nns-runtime"
-            ''
-          else
-            lib.concatStringsSep "\n" (
-              lib.mapAttrsToList (
-                name: service:
-                lib.optionalString (service.nns.type == "longrun") /* bash */ ''
-                  chmod u+w "$out/source/svc-${name}"
-                  printf '10000\n' > "$out/source/svc-${name}/timeout-down"
-                ''
-              ) enabledServices
-            )
-        }
-      '';
-  nativeServiceIds =
-    if nativeGraph ? result then map (name: "svc-${name}") nativeGraph.result else [ ];
-  nativeGraph = lib.toposort (left: right: builtins.elem left enabledServices.${right}.nns.after) (
-    builtins.attrNames enabledServices
-  );
+      serviceManagerDefinition.render {
+        inherit pkgs lib;
+        services = serviceActions;
+        modules = portableModules;
+      };
+  serviceGraph = lib.toposort (left: right: builtins.elem left allServices.${right}.nns.after) serviceNames;
+  serviceIds = if serviceGraph ? result then map (name: "svc-${name}") serviceGraph.result else [ ];
   isBootService =
     name: visited:
     !(builtins.elem name visited)
-    && enabledServices.${name}.nns.startAt == "boot"
+    && allServices.${name}.nns.startAt == "boot"
     && builtins.all (
       dependency: isBootService dependency (visited ++ [ name ])
-    ) enabledServices.${name}.nns.after;
-  nativeBootServices = lib.pipe (nativeGraph.result or [ ]) [
+    ) allServices.${name}.nns.after;
+  bootServiceIds = lib.pipe (serviceGraph.result or [ ]) [
     (lib.filter (name: isBootService name [ ]))
     (lib.map (name: "svc-${name}"))
   ];
@@ -424,51 +376,33 @@ let
     ln -s ${infrastructure} "$out/system-profile"
     ln -s ${etc} "$out/etc"
     ln -s ${serviceManagerDefinition.controller} "$out/service-backend.sh"
+    ${lib.optionalString (serviceDefinitions != null) ''
+      ln -s ${serviceDefinitions} "$out/service-definitions"
+    ''}
+    printf '%s\n' ${lib.escapeShellArg cfg.system.serviceManager} > "$out/service-backend"
+    printf '1\n' > "$out/service-protocol"
+    printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" bootServiceIds)} > "$out/boot-services"
+    printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" serviceIds)} > "$out/all-services"
+    ${lib.pipe runTreeServices [
+      (lib.mapAttrsToList (
+        name: service: ''
+          mkdir -p "$out/services/${name}"
+          ln -s ${service.action} "$out/services/${name}/run"
+          ${lib.optionalString service.oneshot ''
+            touch "$out/services/${name}/oneshot"
+            ln -s ${service.finish} "$out/services/${name}/finish"
+          ''}
+          ${lib.optionalString (service.after != [ ]) ''
+            printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" service.after)} > "$out/services/${name}/after"
+          ''}
+        ''
+      ))
+      (lib.concatStringsSep "\n")
+    ]}
     ${lib.pipe profiles [
       (lib.mapAttrsToList (name: profile: ''ln -s ${profile} "$out/profiles/${name}"''))
       (lib.concatStringsSep "\n")
     ]}
-    ${
-      if nativeBackend then
-        /* bash */ ''
-          ln -s ${nativeServicePackage} "$out/service-definitions"
-          printf '%s\n' ${lib.escapeShellArg cfg.system.serviceManager} > "$out/service-backend"
-          printf '1\n' > "$out/service-protocol"
-          printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" nativeBootServices)} > "$out/boot-services"
-          printf '%s\n' ${lib.escapeShellArg (lib.concatStringsSep "\n" nativeServiceIds)} > "$out/all-services"
-          ${lib.pipe enabledServices [
-            (lib.mapAttrsToList (
-              name: service: /* bash */ ''
-                mkdir -p "$out/services/${name}"
-                ln -s ${renderNativeAction name service} "$out/services/${name}/run"
-                ${lib.optionalString (service.nns.type == "oneshot") /* bash */ ''
-                  touch "$out/services/${name}/oneshot"
-                  ln -s ${renderFinish name} "$out/services/${name}/finish"
-                ''}
-              ''
-            ))
-            (lib.concatStringsSep "\n")
-          ]}
-        ''
-      else
-        /* bash */ ''
-          ${lib.pipe enabledServices [
-            (lib.mapAttrsToList (
-              name: service: /* bash */ ''
-                mkdir -p "$out/services/${name}"
-                ln -s ${renderService name service} "$out/services/${name}/run"
-                ${lib.optionalString (service.nns.type == "oneshot") /* bash */ ''
-                  touch "$out/services/${name}/oneshot"
-                  ln -s ${renderFinish name} "$out/services/${name}/finish"
-                ''}
-              ''
-            ))
-            (lib.concatStringsSep "\n")
-          ]}
-          printf 'runit\n' > "$out/service-backend"
-          printf '1\n' > "$out/service-protocol"
-        ''
-    }
     cat > "$out/service-control" <<'BASH'
     #!${pkgs.runtimeShell}
     set -eu
@@ -477,7 +411,6 @@ let
     export NNS_STATE_DIRECTORY=${lib.escapeShellArg state}
     export NNS_ETC_DIRECTORY=${lib.escapeShellArg etcDirectory}
     export NNS_LAUNCHER=${lib.escapeShellArg cfg.system.launcher}
-    export NNS_S6_RUNTIME=${./service-s6-rc.sh}
     exec ${pkgs.runtimeShell} ${./service-runtime.sh} "$generation" "$@"
     BASH
     chmod 755 "$out/service-control"
@@ -542,9 +475,12 @@ in
         default = {
           runit = {
             controller = ./service-runit.sh;
+            render = null;
+            runtimePackages = [ pkgs.runit ];
           };
           s6-rc = {
             controller = ./service-s6-rc.sh;
+            render = import ./definitions-s6-rc.nix;
             runtimePackages = [
               pkgs.s6
               pkgs.s6-rc
@@ -552,6 +488,7 @@ in
           };
           dinit = {
             controller = ./service-dinit.sh;
+            render = import ./definitions-dinit.nix;
             runtimePackages = [ pkgs.dinit ];
           };
         };
@@ -564,6 +501,14 @@ in
                   Shell implementation sourced by the runtime. It defines
                   backend_preflight, backend_prepare, backend_activate,
                   backend_stop, and backend_resume_after_failure.
+                '';
+              };
+              render = mkOption {
+                type = types.nullOr (types.functionTo types.package);
+                default = null;
+                description = ''
+                  Builds the manager definitions from the rendered
+                  services. Runit needs none and keeps the default.
                 '';
               };
               runtimePackages = mkOption {
@@ -821,7 +766,7 @@ in
                   )
                 )
                 && !(service.process.environment ? PATH)
-                && (!nativeBackend || !service.nns.enable || name != "nns-dispatcher")
+                && name != "nns-dispatcher"
                 && builtins.all validVariable (builtins.attrNames service.process.environment)
                 && builtins.all (
                   dependency: builtins.hasAttr dependency enabledServices && dependency != name

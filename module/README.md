@@ -31,6 +31,12 @@ It does not create, format, repair, resize or migrate filesystems. The kernel
 must support Btrfs and loop devices. SELinux must permit the mount and access
 to the prepared file labels. No policy relaxation is added for this backend.
 
+This backend is not enabled and is not used. Directory mode remains the
+deployed mode. Measured phone results, including a durability gap where `fsync`
+does not reach the backing device, are in
+[Btrfs backing evaluation](../benchmarks/storage-backends/README.md). Read that
+document before selecting this backend.
+
 Persistent configuration lives at `/data/nns-storage/backing.conf`, outside the
 module and the mounted filesystem. Without this file, directory mode remains
 unchanged. The configuration contains exactly three newline-terminated fields:

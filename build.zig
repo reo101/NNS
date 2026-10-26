@@ -126,6 +126,13 @@ pub fn build(b: *std.Build) void {
         handoff_fixture.root_module.addImport("linux_uapi", translation.mod);
         const handoff_fixture_step = b.step("storage-handoff-fixture", "Install the storage handoff test executable");
         handoff_fixture_step.dependOn(&b.addInstallArtifact(handoff_fixture, .{}).step);
+        const throughput_fixture = executable(b, "nns-storage-throughput", "benchmarks/storage-backends/throughput-probe.zig", target, optimize, true);
+        throughput_fixture.root_module.addImport("linux_uapi", translation.mod);
+        const throughput_fixture_step = b.step("storage-throughput-fixture", "Install the storage throughput probe");
+        throughput_fixture_step.dependOn(&b.addInstallArtifact(throughput_fixture, .{}).step);
+        const bench_mount = executable(b, "nns-storage-bench-mount", "benchmarks/storage-backends/bench-mount.zig", target, optimize, false);
+        bench_mount.root_module.addImport("linux_uapi", translation.mod);
+        throughput_fixture_step.dependOn(&b.addInstallArtifact(bench_mount, .{}).step);
         const storage = executable(b, "nns-storage", "module/src/nns-storage.zig", target, optimize, false);
         storage.root_module.addImport("linux_uapi", translation.mod);
         storage_step.dependOn(&b.addInstallArtifact(storage, .{}).step);

@@ -1,0 +1,15 @@
+gcc 16 makes strchr() keep the pointee constness (C23). resolve_full_path()
+assigns the result to a non-const pointer and tools/lib/bpf/Makefile forces
+-Werror, so the host-tool build fails. The pointer is only read, so make it
+const. Applies to both the 6.1 ACK and 6.6 emulator ACK trees.
+--- a/tools/lib/bpf/libbpf.c
++++ b/tools/lib/bpf/libbpf.c
+@@ -10748,7 +10748,7 @@
+ 		if (!search_paths[i])
+ 			continue;
+ 		for (s = search_paths[i]; s != NULL; s = strchr(s, ':')) {
+-			char *next_path;
++			const char *next_path;
+ 			int seg_len;
+ 
+ 			if (s[0] == ':')

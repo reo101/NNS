@@ -70,6 +70,7 @@ stdenv.mkDerivation {
     patch -p1 < ${./patches/susfs-newuname.patch}
     patch -p1 < ${./patches/susfs-taskmmu.patch}
     patch -p1 < ${./patches/nns-seccomp-bypass.patch}
+    patch -p1 < ${./patches/libbpf-strchr-const.patch}
     test -z "$(find . -name '*.rej' -print -quit)"
     patchShebangs scripts tools arch/arm64
     runHook postPatch

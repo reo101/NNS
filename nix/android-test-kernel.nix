@@ -25,6 +25,7 @@ stdenv.mkDerivation {
     printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
     python3 ${../tests/android/patch-kernel.py} ${../kernel/patches/nns-seccomp-bypass.patch}
+    patch -p1 < ${../kernel/patches/libbpf-strchr-const.patch}
     patchShebangs scripts tools/objtool tools/bpf tools/build tools/lib arch/x86/tools
   '';
   env = {

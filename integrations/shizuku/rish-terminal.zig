@@ -2,30 +2,48 @@
 // Shizuku process transport: framed input/control, unmodified output streams.
 const std = @import("std");
 const builtin = @import("builtin");
+const linux = std.os.linux;
 const c = @import("c");
 
 const max_data = 4096;
-// POSIX signal sentinels are integer values, not aligned function addresses.
-extern "c" fn signal(number: c_int, handler: usize) usize;
 const Kind = enum(u8) { data = 1, window = 2, eof = 3, _ };
 const TerminalStream = enum { stdin, stdout, stderr };
 const TerminalStreams = std.enums.EnumSet(TerminalStream);
-var termination = std.atomic.Value(c_int).init(0);
-var resized = std.atomic.Value(bool).init(false);
+var termination: std.atomic.Value(c_int) = .init(0);
+var resized: std.atomic.Value(bool) = .init(false);
 
-fn signalHandler(number: c_int) callconv(.c) void {
-    if (number == c.SIGWINCH) resized.store(true, .monotonic) else termination.store(number, .monotonic);
+fn signalHandler(number: std.posix.SIG) callconv(.c) void {
+    if (number == .WINCH) resized.store(true, .monotonic) else termination.store(@intCast(@backingInt(number)), .monotonic);
 }
 
 fn installSignals() void {
-    for ([_]c_int{ c.SIGTERM, c.SIGHUP, c.SIGINT, c.SIGQUIT, c.SIGWINCH }) |number| {
-        _ = signal(number, @intFromPtr(&signalHandler));
-    }
-    _ = signal(c.SIGPIPE, 1);
+    const action: std.posix.Sigaction = .{
+        .handler = .{ .handler = signalHandler },
+        .mask = std.posix.sigemptyset(),
+        // Match signal(3) BSD semantics: syscalls interrupted by these
+        // handlers resume instead of surfacing EINTR.
+        .flags = std.posix.SA.RESTART,
+    };
+    for ([_]std.posix.SIG{ .TERM, .HUP, .INT, .QUIT, .WINCH }) |number| std.posix.sigaction(number, &action, null);
+    const ignored: std.posix.Sigaction = .{
+        .handler = .{ .handler = std.posix.SIG.IGN },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(.PIPE, &ignored, null);
+}
+
+fn resetSignal(number: std.posix.SIG) void {
+    const defaults: std.posix.Sigaction = .{
+        .handler = .{ .handler = null },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(number, &defaults, null);
 }
 
 fn errno() c_int {
-    return if (builtin.target.abi == .android) c.__errno().* else c.__errno_location().*;
+    return std.c._errno().*;
 }
 
 fn checkSignal() !void {
@@ -221,7 +239,7 @@ fn terminateChild(child: c.pid_t) void {
 
 fn hostMode(mask: TerminalStreams, argv: [*]?[*:0]const u8) !u8 {
     installSignals();
-    _ = signal(c.SIGCHLD, 0);
+    resetSignal(.CHLD);
     try nonblocking(0);
     var decoder: Decoder = .{};
     var initial_window: [8]u8 = undefined;
@@ -262,7 +280,7 @@ fn hostMode(mask: TerminalStreams, argv: [*]?[*:0]const u8) !u8 {
     const child = c.fork();
     if (child < 0) return error.Fork;
     if (child == 0) {
-        for ([_]c_int{ c.SIGTERM, c.SIGHUP, c.SIGINT, c.SIGQUIT, c.SIGPIPE, c.SIGWINCH, c.SIGCHLD }) |number| _ = signal(number, 0);
+        for ([_]std.posix.SIG{ .TERM, .HUP, .INT, .QUIT, .PIPE, .WINCH, .CHLD }) |number| resetSignal(number);
         if (c.setsid() < 0) c._exit(127);
         if (slave >= 0 and c.ioctl(slave, c.TIOCSCTTY, @as(c_int, 0)) < 0) c._exit(127);
         if (c.dup2(if (mask.contains(.stdin)) slave else pipe[0], 0) < 0) c._exit(127);
@@ -362,7 +380,7 @@ fn hostMode(mask: TerminalStreams, argv: [*]?[*:0]const u8) !u8 {
     }
     child_reaped = try reap(child, &status, 0);
     const bits: u32 = @bitCast(status);
-    return if (bits & 0x7f == 0) @intCast((bits >> 8) & 0xff) else @intCast(128 + (bits & 0x7f));
+    return if (linux.W.IFEXITED(bits)) linux.W.EXITSTATUS(bits) else @intCast(128 + @backingInt(linux.W.TERMSIG(bits)));
 }
 
 pub export fn main(argc: c_int, argv: [*]?[*:0]const u8) c_int {

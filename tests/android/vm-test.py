@@ -108,8 +108,9 @@ try:
         adb('push', str(Path(spec['seed']) / 'store.tar.gz'), '/data/local/tmp/nns-store.tar.gz')
         adb('push', str(Path(spec['seed']) / 'registration'), '/data/local/tmp/nns-registration')
         ksu('tar -xzf /data/local/tmp/nns-store.tar.gz -C /data; '
+            'find /data/nix/store -exec chcon -h u:object_r:system_data_file:s0 {} +; '
             'mkdir -p /data/nix/var/nix/profiles; '
-            f'ln -s {shlex.quote(spec["bootstrap"])} /data/nix/var/nix/profiles/profile; '
+            f'ln -s {shlex.quote(spec["bootstrap"])} /data/nix/var/nix/profiles/system-profile; '
             '/data/adb/ksud post-fs-data')
         shell('test -x /data/nix/bin/nix-enter; test -f /data/nix/lib/libnns-dns.so')
         # Keep normal signature checking: the only trusted key is this VM's.
@@ -120,6 +121,8 @@ try:
         local_config = work / 'nix.conf'
         local_config.write_text(config_text)
         adb('push', str(local_config), '/data/nix/etc/nix/nix.conf')
+        # adb push lands the file world-writable; the module's own copy is 0644.
+        ksu('chmod 644 /data/nix/etc/nix/nix.conf')
         ksu('/data/nix/bin/nix-enter --tmpdir /data/nix/tmp -- '
             'env NIX_CONF_DIR=/data/nix/etc/nix NIX_REMOTE=local '
             f'{spec["nix"]}/bin/nix-store --load-db < /data/local/tmp/nns-registration')

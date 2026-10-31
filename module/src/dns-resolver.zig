@@ -20,7 +20,7 @@ fn resolve(argc: c_int, argv: [*]const [*:0]const u8) !void {
     const service = if (std.mem.eql(u8, std.mem.span(argv[7]), "1")) argv[8] else null;
     var result: [*c]c.struct_addrinfo = null;
     const rc = c.getaddrinfo(node, service, &hints, &result);
-    const saved_errno = c.__errno().*;
+    const saved_errno = std.c._errno().*;
     defer if (result != null) c.freeaddrinfo(result);
     var header: wire.Header = .{ .status = wire.glibcError(rc), .err = if (rc == c.EAI_SYSTEM) saved_errno else 0 };
     var records: [wire.max_results]wire.Record = undefined;

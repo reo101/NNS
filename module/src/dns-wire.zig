@@ -4,6 +4,8 @@ const std = @import("std");
 const linux = std.os.linux;
 pub const magic = 0x31444e4e; // NND1
 pub const max_results = 64;
+pub const af_inet = 2;
+pub const af_inet6 = 10;
 pub const Header = extern struct { magic: u32 = magic, status: i32 = 0, err: i32 = 0, count: u32 = 0 };
 pub const Record = extern struct {
     family: i32 = 0,
@@ -15,7 +17,7 @@ pub const Record = extern struct {
     canon: [256]u8 = @splat(0),
 
     pub fn valid(r: *const Record) bool {
-        return ((r.family == 2 and r.addrlen == 16) or (r.family == 10 and r.addrlen == 28)) and
+        return ((r.family == af_inet and r.addrlen == 16) or (r.family == af_inet6 and r.addrlen == 28)) and
             std.mem.readInt(u16, r.addr[0..2], .little) == r.family and
             r.canonlen < r.canon.len and
             std.mem.indexOfScalar(u8, r.canon[0..r.canonlen], 0) == null;
@@ -38,15 +40,29 @@ pub fn writeAll(fd: i32, bytes: []const u8) !void {
 // glibc and Bionic disagree on AI_NUMERICSERV/ADDRCONFIG/ALL/V4MAPPED.
 // GNU IDN extensions have no Bionic equivalent: reject, never fall back to
 // glibc DNS (which could bypass the Android resolver's privacy policy).
+const glibc_passive = 0x1;
+const glibc_canonname = 0x2;
+const glibc_numerichost = 0x4;
+const glibc_v4mapped = 0x8;
+const glibc_all = 0x10;
+const glibc_addrconfig = 0x20;
+const glibc_numericserv = 0x400;
+const bionic_numericserv = 0x8;
+const bionic_addrconfig = 0x400;
+const bionic_v4mapped = 0x800;
+const bionic_all = 0x100;
+
 pub fn bionicFlags(flags: i32, family: i32) !i32 {
-    if (flags & ~@as(i32, 0x43f) != 0) return error.BadFlags;
-    var result = flags & 7;
-    if (flags & 0x400 != 0) result |= 8;
-    if (flags & 0x20 != 0) result |= 0x400;
+    const known: i32 = glibc_passive | glibc_canonname | glibc_numerichost | glibc_v4mapped |
+        glibc_all | glibc_addrconfig | glibc_numericserv;
+    if (flags & ~known != 0) return error.BadFlags;
+    var result = flags & (glibc_passive | glibc_canonname | glibc_numerichost);
+    if (flags & glibc_numericserv != 0) result |= bionic_numericserv;
+    if (flags & glibc_addrconfig != 0) result |= bionic_addrconfig;
     // V4MAPPED/ALL have no effect unless AF_INET6 was requested.
-    if (family == 10) {
-        if (flags & 8 != 0) result |= 0x800;
-        if (flags & 0x10 != 0) result |= 0x100;
+    if (family == af_inet6) {
+        if (flags & glibc_v4mapped != 0) result |= bionic_v4mapped;
+        if (flags & glibc_all != 0) result |= bionic_all;
     }
     return result;
 }

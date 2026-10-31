@@ -3,13 +3,28 @@
 // TCGETS2/TCSETS2 ioctl translation); Bionic mostly passes through unchanged.
 const std = @import("std");
 const linux = std.os.linux;
-const wire = @import("dns-wire.zig");
 extern fn dlsym(?*anyopaque, [*:0]const u8) ?*anyopaque;
 extern fn getenv([*:0]const u8) ?[*:0]const u8;
 extern fn readlink([*:0]const u8, [*]u8, usize) isize;
 extern fn calloc(usize, usize) ?*anyopaque;
 extern fn free(?*anyopaque) void;
+const wire = @import("dns-wire.zig");
+
+// The preload must not request libc linkage: std.c declarations are gated on
+// link_libc, so the five symbols this library borrows from its host are
+// declared here and stay undefined until the loading process resolves them.
 const next: ?*anyopaque = @ptrFromInt(std.math.maxInt(usize)); // RTLD_NEXT, LP64
+
+// Termios ioctls: the modern pair carries the platform xperm whitelist that
+// rejects app ptys, the legacy pair is the permitted fallback.
+const tcgets: u64 = 0x5401;
+const tcsets: u64 = 0x5402;
+const tcgets2: u64 = 0x542a;
+const tcsets2: u64 = 0x542b;
+
+const eacces: c_int = @backingInt(std.posix.E.ACCES);
+const eperm: c_int = @backingInt(std.posix.E.PERM);
+const enotty: c_int = @backingInt(std.posix.E.NOTTY);
 const AddrInfo = extern struct {
     flags: i32 = 0,
     family: i32 = 0,
@@ -46,26 +61,26 @@ pub export fn isatty(fd: c_int) c_int {
     const native: RealIsatty = @ptrCast(@alignCast(dlsym(next, "isatty") orelse return 0));
     if (native(fd) != 0) return 1;
     const ep = errnoPtr() orelse return 0;
-    if (ep.* != 13 and ep.* != 1) return 0; // genuine ENOTTY etc: not a tty
+    if (ep.* != eacces and ep.* != eperm) return 0; // genuine ENOTTY etc: not a tty
     const io: Ioctl = @ptrCast(@alignCast(dlsym(next, "ioctl") orelse return 0));
     var probe: [64]u8 = undefined; // termios2-sized scratch for the probe
-    if (io(fd, 0x5401, &probe) >= 0) { // TCGETS
+    if (io(fd, tcgets, &probe) >= 0) {
         ep.* = 0;
         return 1;
     }
-    ep.* = 25; // ENOTTY
+    ep.* = enotty;
     return 0;
 }
 
 fn tcRetry(fd: c_int, legacy: u64, arg: ?*anyopaque, restore: ?*anyopaque) c_int {
     const ep = errnoPtr() orelse return -1;
-    if (ep.* != 13 and ep.* != 1) return -1;
+    if (ep.* != eacces and ep.* != eperm) return -1;
     const io: Ioctl = @ptrCast(@alignCast(dlsym(next, "ioctl") orelse return -1));
     if (io(fd, legacy, restore orelse arg) >= 0) {
         ep.* = 0;
         return 0;
     }
-    if (ep.* == 13 or ep.* == 1) ep.* = 25; // ENOTTY
+    if (ep.* == eacces or ep.* == eperm) ep.* = enotty;
     return -1;
 }
 
@@ -75,14 +90,14 @@ pub export fn tcgetattr(fd: c_int, out: ?*anyopaque) c_int {
     if (rc == 0) return 0;
     // The legacy TCGETS writes the identical 36-byte prefix of the
     // termios2 struct; only the trailing speed fields stay stale.
-    return tcRetry(fd, 0x5401, out, out);
+    return tcRetry(fd, tcgets, out, out);
 }
 
 pub export fn tcsetattr(fd: c_int, actions: c_int, in: ?*anyopaque) c_int {
     const native: RealTcSetattr = @ptrCast(@alignCast(dlsym(next, "tcsetattr") orelse return -1));
     const rc = native(fd, actions, in);
     if (rc == 0) return 0;
-    return tcRetry(fd, 0x5402, in, in);
+    return tcRetry(fd, tcsets, in, in);
 }
 
 // glibc's ttyname calls its hidden __tcgetattr, bypassing the ioctl and
@@ -94,7 +109,7 @@ pub export fn ttyname(fd: c_int) ?[*:0]u8 {
     if (dlsym(next, "gnu_get_libc_version") == null) return null;
     const ep = errnoPtr() orelse return null;
     const original_error = ep.*;
-    if (original_error != 13 and original_error != 1) return null;
+    if (original_error != eacces and original_error != eperm) return null;
     if (isatty(fd) != 1) {
         ep.* = original_error;
         return null;
@@ -151,13 +166,13 @@ pub export fn ioctl(fd: c_int, request: u64, arg: ?*anyopaque) c_int {
     // and ENOTTY is the truthful answer for callers to fall back on.
     const native: Ioctl = @ptrCast(@alignCast(dlsym(next, "ioctl") orelse return -1));
     const rc = native(fd, request, arg);
-    if (rc >= 0 or (request != 0x542A and request != 0x542B)) return rc;
+    if (rc >= 0 or (request != tcgets2 and request != tcsets2)) return rc;
     const errno_fn: Errno = @ptrCast(@alignCast(dlsym(next, "__errno_location") orelse return rc));
     const err = errno_fn().*;
-    if (err != 13 and err != 1) return rc; // EACCES / EPERM only
-    const retry = native(fd, if (request == 0x542A) 0x5401 else 0x5402, arg);
+    if (err != eacces and err != eperm) return rc;
+    const retry = native(fd, if (request == tcgets2) tcgets else tcsets, arg);
     if (retry >= 0) return 0;
-    if (errno_fn().* == 13 or errno_fn().* == 1) errno_fn().* = 25; // ENOTTY
+    if (errno_fn().* == eacces or errno_fn().* == eperm) errno_fn().* = enotty;
     return -1;
 }
 
@@ -187,7 +202,7 @@ fn release(first: ?*AddrInfo) void {
 
 fn milliseconds() !i64 {
     var ts: linux.timespec = undefined;
-    if (wire.signed(linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts)) < 0) return error.Clock;
+    if (std.posix.errno(linux.clock_gettime(.MONOTONIC, &ts)) != .SUCCESS) return error.Clock;
     return ts.sec * 1000 + @divTrunc(ts.nsec, 1_000_000);
 }
 fn readFull(fd: i32, bytes: []u8, deadline: i64) !void {
@@ -197,20 +212,20 @@ fn readFull(fd: i32, bytes: []u8, deadline: i64) !void {
         if (left <= 0) return error.Timeout;
         var pfd: linux.pollfd = .{ .fd = fd, .events = linux.POLL.IN, .revents = 0 };
         var timeout: linux.timespec = .{ .sec = @divTrunc(left, 1000), .nsec = @mod(left, 1000) * 1_000_000 };
-        const ready = wire.signed(linux.ppoll(@ptrCast(&pfd), 1, &timeout, null));
-        if (ready == -4) continue;
-        if (ready <= 0) return error.Timeout;
-        const n = wire.signed(linux.read(fd, bytes[pos..].ptr, bytes.len - pos));
-        if (n == -4) continue;
-        if (n <= 0) return error.Truncated;
-        pos += @intCast(n);
+        const ready = linux.ppoll(@ptrCast(&pfd), 1, &timeout, null);
+        if (std.posix.errno(ready) == .INTR) continue;
+        if (wire.signed(ready) <= 0) return error.Timeout;
+        const n = linux.read(fd, bytes[pos..].ptr, bytes.len - pos);
+        if (std.posix.errno(n) == .INTR) continue;
+        if (wire.signed(n) <= 0) return error.Truncated;
+        pos += n;
     }
 }
 
 fn resolve(node: ?[*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInfo, result: *?*AddrInfo) !c_int {
     const h = if (hints) |p| p.* else AddrInfo{ .flags = 0x28 };
     const flags = try wire.bionicFlags(h.flags, h.family);
-    if (h.family != 0 and h.family != 2 and h.family != 10) return -6;
+    if (h.family != 0 and h.family != wire.af_inet and h.family != wire.af_inet6) return -6;
     if (node == null and service == null) return -2;
     if (node) |p| {
         if (std.mem.span(p).len > 4096) return -2;
@@ -232,12 +247,12 @@ fn resolve(node: ?[*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInf
     // No inherited LD_PRELOAD/LD_LIBRARY_PATH, and no process-global unsetenv.
     const env = [_:null]?[*:0]const u8{};
     var fds: [2]i32 = undefined;
-    if (wire.signed(linux.pipe2(&fds, .{ .CLOEXEC = true })) < 0) return error.Pipe;
+    if (std.posix.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS) return error.Pipe;
     defer _ = linux.close(fds[0]);
     // Keep the write endpoint above stdio even when the caller closed stdout.
     const out = linux.fcntl(fds[1], linux.F.DUPFD_CLOEXEC, 3);
     _ = linux.close(fds[1]);
-    if (wire.signed(out) < 0) return error.Pipe;
+    if (std.posix.errno(out) != .SUCCESS) return error.Pipe;
     const output: i32 = @intCast(out);
     const deadline = (milliseconds() catch {
         _ = linux.close(output);
@@ -245,20 +260,20 @@ fn resolve(node: ?[*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInf
     }) + 30_000;
     // A fork-like clone, not vfork. In the child use ONLY raw syscalls until
     // exec: libc locks may be held by another thread in the parent.
-    const child = wire.signed(linux.syscall5(.clone, 17, 0, 0, 0, 0));
+    const child = linux.syscall5(.clone, @backingInt(linux.SIG.CHLD), 0, 0, 0, 0);
     if (child == 0) {
         _ = linux.close(0);
-        if (wire.signed(linux.dup3(output, 1, 0)) < 0) linux.exit(127);
-        if (wire.signed(linux.syscall3(.close_range, 3, std.math.maxInt(u32), 0)) < 0) linux.exit(127);
+        if (std.posix.errno(linux.dup3(output, 1, 0)) != .SUCCESS) linux.exit(127);
+        if (std.posix.errno(linux.syscall3(.close_range, 3, std.math.maxInt(u32), 0)) != .SUCCESS) linux.exit(127);
         _ = linux.execve(helper, &argv, &env);
         linux.exit(127);
     }
     _ = linux.close(output);
-    if (child < 0) return error.Spawn;
+    if (std.posix.errno(child) != .SUCCESS) return error.Spawn;
     var reaped = false;
     defer if (!reaped) {
         _ = linux.kill(@intCast(child), linux.SIG.KILL);
-        while (wire.signed(linux.syscall4(.wait4, @intCast(child), 0, 0, 0)) == -4) {}
+        while (std.posix.errno(linux.syscall4(.wait4, @intCast(child), 0, 0, 0)) == .INTR) {}
     };
     var header: wire.Header = undefined;
     try readFull(fds[0], std.mem.asBytes(&header), deadline);
@@ -285,12 +300,12 @@ fn resolve(node: ?[*:0]const u8, service: ?[*:0]const u8, hints: ?*const AddrInf
     // Bound the child lifetime, including helpers that close stdout then hang.
     var status: u32 = 0;
     while (true) {
-        const done = wire.signed(linux.syscall4(.wait4, @intCast(child), @intFromPtr(&status), 1, 0));
+        const done = linux.syscall4(.wait4, @intCast(child), @intFromPtr(&status), 1, 0);
         if (done == child) {
             reaped = true;
             break;
         }
-        if (done < 0 and done != -4) return error.Wait;
+        if (std.posix.errno(done) != .SUCCESS and std.posix.errno(done) != .INTR) return error.Wait;
         if (try milliseconds() >= deadline) return error.Timeout;
         var delay: linux.timespec = .{ .sec = 0, .nsec = 1_000_000 };
         _ = linux.nanosleep(&delay, null);

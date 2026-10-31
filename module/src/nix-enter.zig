@@ -3,15 +3,13 @@
 // retain the privileged mount-only path unless --userns is explicit.
 const std = @import("std");
 const linux = std.os.linux;
+const syscall_error = @import("syscall_error");
+const syscall = syscall_error.Program("nix-enter");
 
-fn checked(rc: usize, operation: []const u8) usize {
-    const signed: isize = @bitCast(rc);
-    if (signed < 0 and signed >= -4095) {
-        std.debug.print("nix-enter: {s}: errno {d}\n", .{ operation, -signed });
-        std.process.exit(1);
-    }
-    return rc;
-}
+const at_fdcwd = linux.AT.FDCWD;
+const fail = syscall.fail;
+const checked = syscall.check;
+const errnoCode = syscall_error.errno;
 
 fn path(buf: []u8, base: []const u8, name: []const u8) [:0]u8 {
     return std.mem.printSentinel(buf, "{s}/{s}", .{ base, name }, 0) catch {
@@ -21,28 +19,47 @@ fn path(buf: []u8, base: []const u8, name: []const u8) [:0]u8 {
 }
 
 fn writeProc(name: [*:0]const u8, value: []const u8) void {
-    const fd: i32 = @intCast(checked(linux.openat(-100, name, .{ .ACCMODE = .WRONLY }, 0), std.mem.span(name)));
+    const fd: i32 = @intCast(checked(linux.openat(at_fdcwd, name, .{ .ACCMODE = .WRONLY, .CLOEXEC = true }, 0), std.mem.span(name)));
     defer _ = linux.close(fd);
     var op_buf: [64]u8 = undefined;
-    const op = std.mem.print(&op_buf, "write {s}", .{std.mem.span(name)}) catch "write namespace mapping";
-    if (checked(linux.write(fd, value.ptr, value.len), op) != value.len) {
-        std.debug.print("nix-enter: short namespace mapping write\n", .{});
-        std.process.exit(1);
+    const operation = std.mem.print(&op_buf, "write {s}", .{std.mem.span(name)}) catch "write namespace mapping";
+    var offset: usize = 0;
+    while (offset < value.len) {
+        const result = linux.write(fd, value.ptr + offset, value.len - offset);
+        if (errnoCode(result) == .INTR) continue;
+        offset += checked(result, operation);
     }
 }
 
+fn writeAll(fd: i32, bytes: []const u8, operation: []const u8) void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const result = linux.write(fd, bytes.ptr + offset, bytes.len - offset);
+        if (errnoCode(result) == .INTR) continue;
+        offset += checked(result, operation);
+    }
+}
+
+fn readAll(fd: i32, contents: []u8, operation: []const u8) usize {
+    var length: usize = 0;
+    while (length < contents.len) {
+        const result = linux.read(fd, contents.ptr + length, contents.len - length);
+        if (errnoCode(result) == .INTR) continue;
+        const count = checked(result, operation);
+        if (count == 0) break;
+        length += count;
+    }
+    return length;
+}
+
 fn enterUserns(uid: u32, gid: u32) void {
-    const r1 = linux.unshare(0x10000000 | 0x00020000);
-    if (@as(isize, @bitCast(r1)) < 0) {
+    const combined = linux.unshare(linux.CLONE.NEWUSER | linux.CLONE.NEWNS);
+    if (errnoCode(combined) != null) {
         // An inherited seccomp filter can reject the combined flags; split
         // the calls. A NEWUSER failure surfaces on the uid_map write below.
-        const r2 = linux.unshare(0x10000000);
-        if (@as(isize, @bitCast(r2)) >= 0) {
-            const r3 = linux.unshare(0x00020000);
-            if (@as(isize, @bitCast(r3)) < 0) {
-                std.debug.print("nix-enter: unshare NEWNS: errno {d}\n", .{-@as(isize, @bitCast(r3))});
-                std.process.exit(1);
-            }
+        if (errnoCode(linux.unshare(linux.CLONE.NEWUSER)) == null) {
+            const mount_namespace = linux.unshare(linux.CLONE.NEWNS);
+            if (errnoCode(mount_namespace)) |code| fail("unshare NEWNS: {t}", .{code});
         }
     }
     // Android's init userns has setgroups enabled and a fresh userns inherits
@@ -58,7 +75,7 @@ fn enterUserns(uid: u32, gid: u32) void {
     writeProc("/proc/self/uid_map", uid_map);
     const gid_map = std.mem.print(&buf, "{d} {d} 1\n", .{ gid, gid }) catch unreachable;
     writeProc("/proc/self/gid_map", gid_map);
-    _ = checked(linux.syscall5(.prctl, 38, 1, 0, 0, 0), "no_new_privs");
+    _ = checked(linux.prctl(@backingInt(linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0), "no_new_privs");
 }
 
 fn mount(op: []const u8, source: ?[*:0]const u8, target: [*:0]const u8, kind: ?[*:0]const u8, flags: u32, data: usize) void {
@@ -75,9 +92,9 @@ fn mountPrivateVar(io: std.Io, root: []const u8) !void {
     defer _ = linux.syscall1(.umask, previous_umask);
     var var_buf: [4096]u8 = undefined;
     const var_root = path(&var_buf, root, "var");
-    _ = checked(linux.mkdirat(-100, var_root.ptr, 0o755), "create private /var");
+    _ = checked(linux.mkdirat(at_fdcwd, var_root.ptr, 0o755), "create private /var");
     var destination_buf: [4096]u8 = undefined;
-    _ = checked(linux.mkdirat(-100, path(&destination_buf, var_root, "empty").ptr, 0o755), "create private /var/empty");
+    _ = checked(linux.mkdirat(at_fdcwd, path(&destination_buf, var_root, "empty").ptr, 0o755), "create private /var/empty");
     var original: ?std.Io.Dir = std.Io.Dir.openDirAbsolute(io, "/var", .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => null,
         else => return err,
@@ -91,33 +108,28 @@ fn mountPrivateVar(io: std.Io, root: []const u8) !void {
             if (std.mem.eql(u8, entry.name, "empty")) continue;
             const destination = path(&destination_buf, var_root, entry.name);
             if (entry.kind == .directory) {
-                _ = checked(linux.mkdirat(-100, destination.ptr, 0o755), "mirror /var directory");
+                _ = checked(linux.mkdirat(at_fdcwd, destination.ptr, 0o755), "mirror /var directory");
                 mount("bind /var mirror", path(&source_buf, "/var", entry.name).ptr, destination.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
             } else {
                 const target = path(&target_buf, "../.nns-host/var", entry.name);
-                _ = checked(linux.symlinkat(target.ptr, -100, destination.ptr), "mirror /var entry");
+                _ = checked(linux.symlinkat(target.ptr, at_fdcwd, destination.ptr), "mirror /var entry");
             }
         }
     }
 }
 
+const account_registry_limit = 64 * 1024;
+
 fn registeredAccount(allocator: std.mem.Allocator, uid: u32) !?struct { name: []const u8, gid: u32 } {
-    const opened = linux.openat(-100, "/nix/var/nix/profiles/system-profile/etc/nns/passwd", .{ .ACCMODE = .RDONLY }, 0);
-    if (@as(isize, @bitCast(opened)) == -2) return null; // Bootstrap without an infrastructure profile.
+    const opened = linux.openat(at_fdcwd, "/nix/var/nix/profiles/system-profile/etc/nns/passwd", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    if (errnoCode(opened) == .NOENT) return null; // Bootstrap without an infrastructure profile.
     const fd: i32 = @intCast(checked(opened, "open registered accounts"));
     defer _ = linux.close(fd);
-    var temporary_buffer: [4096]u8 = undefined;
-    var buffer_first: std.heap.BufferFirstAllocator = .init(&temporary_buffer, allocator);
-    const temporary_allocator = buffer_first.allocator();
-    var contents = std.ArrayList(u8).empty;
-    defer contents.deinit(temporary_allocator);
-    var buffer: [4096]u8 = undefined;
-    while (true) {
-        const count = checked(linux.read(fd, &buffer, buffer.len), "read registered accounts");
-        if (count == 0) break;
-        try contents.appendSlice(temporary_allocator, buffer[0..count]);
-    }
-    var lines = std.mem.splitScalar(u8, contents.items, '\n');
+    const contents = try allocator.alloc(u8, account_registry_limit);
+    defer allocator.free(contents);
+    const length = readAll(fd, contents, "read registered accounts");
+    if (length == contents.len) return error.AccountRegistryTooLarge;
+    var lines = std.mem.splitScalar(u8, contents[0..length], '\n');
     while (lines.next()) |line| {
         if (line.len == 0) continue;
         var fields = std.mem.splitScalar(u8, line, ':');
@@ -138,7 +150,7 @@ fn mountCallerEtc(io: std.Io, root: []const u8) !void {
     defer _ = linux.syscall1(.umask, previous_umask);
     var etc_buf: [4096]u8 = undefined;
     const etc_root = path(&etc_buf, root, "etc");
-    _ = checked(linux.mkdirat(-100, etc_root.ptr, 0o755), "create private /etc");
+    _ = checked(linux.mkdirat(at_fdcwd, etc_root.ptr, 0o755), "create private /etc");
     var destination_buf: [4096]u8 = undefined;
     var original: ?std.Io.Dir = std.Io.Dir.openDirAbsolute(io, "/etc", .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => null,
@@ -153,10 +165,10 @@ fn mountCallerEtc(io: std.Io, root: []const u8) !void {
             if (std.mem.eql(u8, entry.name, "passwd") or std.mem.eql(u8, entry.name, "group")) continue;
             const destination = path(&destination_buf, etc_root, entry.name);
             if (entry.kind == .directory) {
-                _ = checked(linux.mkdirat(-100, destination.ptr, 0o755), "mirror /etc directory");
+                _ = checked(linux.mkdirat(at_fdcwd, destination.ptr, 0o755), "mirror /etc directory");
                 mount("bind /etc mirror", path(&source_buf, "/etc", entry.name).ptr, destination.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
             } else {
-                _ = checked(linux.symlinkat(path(&target_buf, "../.nns-host/etc", entry.name).ptr, -100, destination.ptr), "mirror /etc entry");
+                _ = checked(linux.symlinkat(path(&target_buf, "../.nns-host/etc", entry.name).ptr, at_fdcwd, destination.ptr), "mirror /etc entry");
             }
         }
     }
@@ -183,9 +195,9 @@ fn writeCallerAccounts(allocator: std.mem.Allocator, environ_map: *const std.pro
     }) |file| {
         var destination_buf: [4096]u8 = undefined;
         const destination = path(&destination_buf, "/etc", file.name);
-        const fd: i32 = @intCast(checked(linux.openat(-100, destination.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644), "create caller account file"));
+        const fd: i32 = @intCast(checked(linux.openat(at_fdcwd, destination.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .CLOEXEC = true }, 0o644), "create caller account file"));
         defer _ = linux.close(fd);
-        if (checked(linux.write(fd, file.contents.ptr, file.contents.len), "write caller account file") != file.contents.len) return error.ShortAccountWrite;
+        writeAll(fd, file.contents, "write caller account file");
     }
     return if (registered != null) name else null;
 }
@@ -215,8 +227,8 @@ fn profilePath(allocator: std.mem.Allocator, profile: []const u8, generation: ?[
         }
         break :blk std.mem.printSentinel(&candidate_buf, "/nix/var/nix/profiles/{s}", .{name}, 0) catch unreachable;
     };
-    const fd = linux.openat(-100, candidate.ptr, .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
-    if (@as(isize, @bitCast(fd)) < 0) {
+    const fd = linux.openat(at_fdcwd, candidate.ptr, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+    if (errnoCode(fd) != null) {
         std.debug.print("nix-enter: profile not found or not a directory: {s}\n", .{candidate});
         std.process.exit(1);
     }
@@ -224,8 +236,8 @@ fn profilePath(allocator: std.mem.Allocator, profile: []const u8, generation: ?[
     var fd_path_buf: [64]u8 = undefined;
     const fd_path = std.mem.printSentinel(&fd_path_buf, "/proc/self/fd/{d}", .{fd}, 0) catch unreachable;
     var resolved_buf: [4096]u8 = undefined;
-    const resolved_len = linux.readlinkat(-100, fd_path.ptr, &resolved_buf, resolved_buf.len);
-    if (@as(isize, @bitCast(resolved_len)) < 0 or resolved_len >= resolved_buf.len) {
+    const resolved_len = linux.readlinkat(at_fdcwd, fd_path.ptr, &resolved_buf, resolved_buf.len);
+    if (errnoCode(resolved_len) != null or resolved_len >= resolved_buf.len) {
         std.debug.print("nix-enter: cannot resolve profile: {s}\n", .{candidate});
         std.process.exit(1);
     }
@@ -239,8 +251,8 @@ fn profilePath(allocator: std.mem.Allocator, profile: []const u8, generation: ?[
     }
     var bin_buf: [4096]u8 = undefined;
     const bin = path(&bin_buf, resolved, "bin");
-    const bin_fd = linux.openat(-100, bin.ptr, .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
-    if (@as(isize, @bitCast(bin_fd)) < 0) {
+    const bin_fd = linux.openat(at_fdcwd, bin.ptr, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+    if (errnoCode(bin_fd) != null) {
         std.debug.print("nix-enter: profile has no bin directory: {s}\n", .{resolved});
         std.process.exit(1);
     }
@@ -275,8 +287,8 @@ fn exec(allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Ma
     // backing path; the libc-neutral bridge passes Bionic calls through.
     var bridge_buf: [4096]u8 = undefined;
     const bridge = path(&bridge_buf, std.mem.span(store), "lib/libnns-dns.so");
-    const fd = linux.openat(-100, bridge.ptr, .{ .ACCMODE = .RDONLY }, 0);
-    if (@as(isize, @bitCast(fd)) >= 0) {
+    const fd = linux.openat(at_fdcwd, bridge.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    if (errnoCode(fd) == null) {
         _ = linux.close(@intCast(fd));
         const previous = environ_map.get("LD_PRELOAD") orelse "";
         var tokens = std.mem.tokenizeAny(u8, previous, " :");
@@ -389,33 +401,33 @@ pub fn main(init: std.process.Init) !u8 {
     if (checked(linux.getrandom(std.mem.asBytes(&random).ptr, 8, 0), "getrandom") != 8) return error.ShortRandomRead;
     var root_buf: [4096]u8 = undefined;
     const root = std.mem.printSentinel(&root_buf, "{s}/nns.{d}.{x}", .{ tmpdir, linux.getpid(), random }, 0) catch return error.PathTooLong;
-    _ = checked(linux.mkdirat(-100, root.ptr, 0o700), "create scratch directory");
+    _ = checked(linux.mkdirat(at_fdcwd, root.ptr, 0o700), "create scratch directory");
     const parent_pid = linux.getpid();
-    const child = linux.syscall5(.clone, 17, 0, 0, 0, 0); // fork, SIGCHLD; same ABI on arm64/x86_64.
-    if (@as(isize, @bitCast(child)) < 0) {
-        _ = linux.unlinkat(-100, root.ptr, 0x200);
+    const child = linux.syscall5(.clone, @backingInt(linux.SIG.CHLD), 0, 0, 0, 0); // fork; same ABI on arm64/x86_64.
+    if (errnoCode(child) != null) {
+        _ = linux.unlinkat(at_fdcwd, root.ptr, linux.AT.REMOVEDIR);
         _ = checked(child, "fork");
     }
     if (child != 0) {
         var status: u32 = 0;
         while (true) {
             const rc = linux.syscall4(.wait4, child, @intFromPtr(&status), 0, 0);
-            if (@as(isize, @bitCast(rc)) == -4) continue; // EINTR
+            if (errnoCode(rc) == .INTR) continue;
             _ = checked(rc, "wait for command");
             break;
         }
-        _ = checked(linux.unlinkat(-100, root.ptr, 0x200), "remove scratch directory");
-        return if ((status & 0x7f) != 0) @intCast(128 + (status & 0x7f)) else @intCast((status >> 8) & 0xff);
+        _ = checked(linux.unlinkat(at_fdcwd, root.ptr, linux.AT.REMOVEDIR), "remove scratch directory");
+        return if (linux.W.IFEXITED(status)) linux.W.EXITSTATUS(status) else @intCast(128 + @backingInt(linux.W.TERMSIG(status)));
     }
 
-    _ = checked(linux.syscall5(.prctl, 1, 9, 0, 0, 0), "parent death signal");
+    _ = checked(linux.prctl(@backingInt(linux.PR.SET_PDEATHSIG), @backingInt(linux.SIG.TERM), 0, 0, 0), "parent death signal");
     if (linux.getppid() != parent_pid) return 1;
     const uid = linux.getuid();
     const gid = linux.getgid();
     if (userns) {
         enterUserns(uid, gid);
     } else {
-        _ = checked(linux.unshare(0x00020000), "unshare mount namespace");
+        _ = checked(linux.unshare(linux.CLONE.NEWNS), "unshare mount namespace");
     }
     mount("make / private", null, "/", null, linux.MS.PRIVATE | linux.MS.REC, 0);
 
@@ -425,7 +437,7 @@ pub fn main(init: std.process.Init) !u8 {
     var buf: [4096]u8 = undefined;
     for ([_][]const u8{ ".nns-host", ".nns-detach", "nix" }) |name| {
         const target = path(&buf, root, name);
-        _ = checked(linux.mkdirat(-100, target.ptr, 0o755), "mkdir in new root");
+        _ = checked(linux.mkdirat(at_fdcwd, target.ptr, 0o755), "mkdir in new root");
     }
     // Copy the inherited mount tree as a unit. Moving individual inherited
     // mounts fails in less-privileged user namespaces because they are locked.
@@ -436,7 +448,7 @@ pub fn main(init: std.process.Init) !u8 {
     // The original /etc remains reachable at /.nns-host/etc.
     if (etcdir[0] != 0) {
         const dest = path(&buf, root, "etc");
-        _ = checked(linux.mkdirat(-100, dest.ptr, 0o755), "mkdir etc in new root");
+        _ = checked(linux.mkdirat(at_fdcwd, dest.ptr, 0o755), "mkdir etc in new root");
         mount("bind etc", etcdir, dest.ptr, null, linux.MS.BIND, 0);
     } else {
         try mountCallerEtc(io, root);
@@ -455,23 +467,23 @@ pub fn main(init: std.process.Init) !u8 {
         const dest = path(&buf, root, entry.name);
         if (entry.kind == .directory) {
             // Real mountpoints preserve cwd/getcwd and paths reported by Git.
-            _ = checked(linux.mkdirat(-100, dest.ptr, 0o755), "mirror directory");
+            _ = checked(linux.mkdirat(at_fdcwd, dest.ptr, 0o755), "mirror directory");
             mount("bind mirror", path(&source_buf, root, target).ptr, dest.ptr, null, linux.MS.BIND | linux.MS.REC, 0);
         } else {
-            _ = checked(linux.symlinkat(target.ptr, -100, dest.ptr), "mirror root entry");
+            _ = checked(linux.symlinkat(target.ptr, at_fdcwd, dest.ptr), "mirror root entry");
         }
     }
     original.close(io);
     try mountPrivateVar(io, root);
-    if (!has_tmp) _ = checked(linux.mkdirat(-100, path(&buf, root, "tmp").ptr, 0o1777), "create /tmp");
+    if (!has_tmp) _ = checked(linux.mkdirat(at_fdcwd, path(&buf, root, "tmp").ptr, 0o1777), "create /tmp");
     _ = checked(linux.chdir(root.ptr), "chdir new root");
     _ = checked(linux.pivot_root(".", ".nns-detach"), "pivot_root");
     _ = checked(linux.chdir("/"), "chdir root");
-    _ = checked(linux.umount2("/.nns-detach", 2), "detach original root");
-    _ = checked(linux.unlinkat(-100, "/.nns-detach", 0x200), "remove old root mountpoint");
+    _ = checked(linux.umount2("/.nns-detach", linux.MNT.DETACH), "detach original root");
+    _ = checked(linux.unlinkat(at_fdcwd, "/.nns-detach", linux.AT.REMOVEDIR), "remove old root mountpoint");
     // A host nscd socket would bypass this namespace's passwd/group files.
-    const nscd = linux.openat(-100, "/var/run/nscd", .{ .ACCMODE = .RDONLY, .DIRECTORY = true }, 0);
-    if (@as(isize, @bitCast(nscd)) >= 0) {
+    const nscd = linux.openat(at_fdcwd, "/var/run/nscd", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true }, 0);
+    if (errnoCode(nscd) == null) {
         _ = linux.close(@intCast(nscd));
         mount("hide host NSS cache", "/var/empty", "/var/run/nscd", null, linux.MS.BIND, 0);
     }

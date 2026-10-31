@@ -2,23 +2,15 @@
 const std = @import("std");
 const linux = std.os.linux;
 const uapi = @import("linux_uapi");
+const syscall_error = @import("syscall_error");
+const syscall = syscall_error.Program("storage-throughput");
 const chunk = 1024 * 1024;
 const page = 4096;
+const at_fdcwd = linux.AT.FDCWD;
 
-fn fail(comptime format: []const u8, arguments: anytype) noreturn {
-    std.debug.print("storage-throughput: " ++ format ++ "\n", arguments);
-    std.process.exit(1);
-}
-
-fn errnoCode(result: usize) ?c_int {
-    const signed: isize = @bitCast(result);
-    return if (signed < 0 and signed >= -4095) @intCast(-signed) else null;
-}
-
-fn checked(result: usize, operation: []const u8) usize {
-    if (errnoCode(result)) |code| fail("{s}: errno {d}", .{ operation, code });
-    return result;
-}
+const fail = syscall.fail;
+const checked = syscall.check;
+const errnoCode = syscall_error.errno;
 
 fn emit(comptime format: []const u8, arguments: anytype) void {
     var buffer: [2048]u8 = undefined;
@@ -27,10 +19,9 @@ fn emit(comptime format: []const u8, arguments: anytype) void {
 }
 
 fn monotonic() u64 {
-    // clock_gettime writes two native words: seconds, then nanoseconds.
-    var value: [2]i64 = .{ 0, 0 };
-    _ = checked(linux.syscall2(.clock_gettime, 1, @intFromPtr(&value)), "read clock"); // CLOCK_MONOTONIC
-    return @as(u64, @intCast(value[0])) * 1_000_000_000 + @as(u64, @intCast(value[1]));
+    var value: linux.timespec = undefined;
+    _ = checked(linux.clock_gettime(.MONOTONIC, &value), "read clock");
+    return @as(u64, @intCast(value.sec)) * 1_000_000_000 + @as(u64, @intCast(value.nsec));
 }
 
 fn number(text: []const u8) u64 {
@@ -38,11 +29,11 @@ fn number(text: []const u8) u64 {
 }
 
 fn openWrite(path: [*:0]const u8) i32 {
-    return @intCast(checked(linux.openat(-100, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600), "open output"));
+    return @intCast(checked(linux.openat(at_fdcwd, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600), "open output"));
 }
 
 fn openRead(path: [*:0]const u8) i32 {
-    return @intCast(checked(linux.openat(-100, path, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true }, 0), "open input"));
+    return @intCast(checked(linux.openat(at_fdcwd, path, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true }, 0), "open input"));
 }
 
 fn fill(buffer: []u8, seed: u64) void {
@@ -149,12 +140,12 @@ fn metadata(directory: [*:0]const u8, count: u64) void {
     var created: u64 = 0;
     while (created < count) : (created += 1) {
         const path = std.mem.printSentinel(&name, "{s}/file-{d}", .{ directory, created }, 0) catch fail("path too long", .{});
-        const descriptor = linux.openat(-100, @ptrCast(path.ptr), .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600);
-        if (errnoCode(descriptor)) |code| fail("create metadata file: errno {d}", .{code});
+        const descriptor = linux.openat(at_fdcwd, @ptrCast(path.ptr), .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600);
+        if (errnoCode(descriptor)) |code| fail("create metadata file: {t}", .{code});
         _ = linux.close(@intCast(descriptor));
         var status = std.mem.zeroes(uapi.struct_statx);
-        _ = checked(linux.syscall5(.statx, @bitCast(@as(isize, -100)), @intFromPtr(path.ptr), 0, uapi.STATX_BASIC_STATS, @intFromPtr(&status)), "stat metadata file");
-        _ = checked(linux.unlinkat(-100, @ptrCast(path.ptr), 0), "remove metadata file");
+        _ = checked(linux.syscall5(.statx, @bitCast(@as(isize, at_fdcwd)), @intFromPtr(path.ptr), 0, uapi.STATX_BASIC_STATS, @intFromPtr(&status)), "stat metadata file");
+        _ = checked(linux.unlinkat(at_fdcwd, @ptrCast(path.ptr), 0), "remove metadata file");
     }
     const elapsed = monotonic() - started;
     const seconds = @as(f64, @floatFromInt(elapsed)) / 1e9;
@@ -164,7 +155,7 @@ fn metadata(directory: [*:0]const u8, count: u64) void {
 }
 
 fn appendSync(path: [*:0]const u8, records: u64, record: usize) void {
-    const descriptor = @as(i32, @intCast(checked(linux.openat(-100, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600), "open log")));
+    const descriptor = @as(i32, @intCast(checked(linux.openat(at_fdcwd, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600), "open log")));
     defer _ = linux.close(descriptor);
     var buffer: [8192]u8 = undefined;
     if (record > buffer.len) fail("record too large", .{});
@@ -188,7 +179,7 @@ fn appendSync(path: [*:0]const u8, records: u64, record: usize) void {
 }
 
 fn treeCreate(directory: [*:0]const u8, files: u64) void {
-    const root: i32 = @intCast(checked(linux.openat(-100, directory, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true }, 0), "open tree root"));
+    const root: i32 = @intCast(checked(linux.openat(at_fdcwd, directory, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true }, 0), "open tree root"));
     defer _ = linux.close(root);
     var payload: [1024]u8 = undefined;
     fill(&payload, 0x13198a2e03707344);
@@ -198,7 +189,7 @@ fn treeCreate(directory: [*:0]const u8, files: u64) void {
         var directory_name: [32]u8 = undefined;
         const group = std.mem.printSentinel(&directory_name, "d{d}", .{index % 32}, 0) catch unreachable;
         const made = linux.mkdirat(root, group.ptr, 0o755);
-        if (errnoCode(made)) |code| if (code != uapi.EEXIST) fail("create directory: errno {d}", .{code});
+        if (errnoCode(made)) |code| if (code != .EXIST) fail("create directory: {t}", .{code});
         var path: [96]u8 = undefined;
         const relative = std.mem.printSentinel(&path, "d{d}/f{d}", .{ index % 32, index }, 0) catch fail("path too long", .{});
         const descriptor: i32 = @intCast(checked(linux.openat(root, relative.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true, .NOFOLLOW = true, .CLOEXEC = true }, 0o600), "create file"));
@@ -239,7 +230,7 @@ fn deleteDirectory(parent: i32, name: [*:0]const u8, files: *u64) void {
             child[entry.len] = 0;
             if (entry_type == 4) {
                 deleteDirectory(descriptor, @ptrCast(child[0..entry.len :0]), files);
-                _ = checked(linux.unlinkat(descriptor, @ptrCast(child[0..entry.len :0]), 0x200), "remove directory");
+                _ = checked(linux.unlinkat(descriptor, @ptrCast(child[0..entry.len :0]), linux.AT.REMOVEDIR), "remove directory");
             } else {
                 _ = checked(linux.unlinkat(descriptor, @ptrCast(child[0..entry.len :0]), 0), "remove file");
                 files.* += 1;
@@ -249,7 +240,7 @@ fn deleteDirectory(parent: i32, name: [*:0]const u8, files: *u64) void {
 }
 
 fn treeDelete(directory: [*:0]const u8) void {
-    const root: i32 = @intCast(checked(linux.openat(-100, directory, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true }, 0), "open tree root"));
+    const root: i32 = @intCast(checked(linux.openat(at_fdcwd, directory, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true }, 0), "open tree root"));
     defer _ = linux.close(root);
     var files: u64 = 0;
     const started = monotonic();
@@ -258,7 +249,7 @@ fn treeDelete(directory: [*:0]const u8) void {
         var name: [16]u8 = undefined;
         const group = std.mem.printSentinel(&name, "d{d}", .{index}, 0) catch unreachable;
         deleteDirectory(root, group.ptr, &files);
-        _ = checked(linux.unlinkat(root, group.ptr, 0x200), "remove directory");
+        _ = checked(linux.unlinkat(root, group.ptr, linux.AT.REMOVEDIR), "remove directory");
     }
     const elapsed = monotonic() - started;
     const seconds = @as(f64, @floatFromInt(elapsed)) / 1e9;
@@ -272,8 +263,8 @@ fn execLoop(count: u64, argv: []const [*:0]const u8) void {
     var completed: u64 = 0;
     var index: u64 = 0;
     while (index < count) : (index += 1) {
-        const child = linux.syscall5(.clone, 17, 0, 0, 0, 0); // fork, SIGCHLD
-        if (errnoCode(child)) |code| fail("fork: errno {d}", .{code});
+        const child = linux.syscall5(.clone, @backingInt(linux.SIG.CHLD), 0, 0, 0, 0);
+        if (errnoCode(child)) |code| fail("fork: {t}", .{code});
         if (child == 0) {
             _ = linux.execve(argv[0], @ptrCast(argv.ptr), @ptrCast(std.c.environ));
             std.process.exit(127);
@@ -281,11 +272,11 @@ fn execLoop(count: u64, argv: []const [*:0]const u8) void {
         var status: u32 = 0;
         while (true) {
             const rc = linux.syscall4(.wait4, child, @intFromPtr(&status), 0, 0);
-            if (errnoCode(rc) == uapi.EINTR) continue;
+            if (errnoCode(rc) == .INTR) continue;
             _ = checked(rc, "wait for child");
             break;
         }
-        if ((status & 0x7f) == 0 and ((status >> 8) & 0xff) == 0) completed += 1;
+        if (linux.W.IFEXITED(status) and linux.W.EXITSTATUS(status) == 0) completed += 1;
     }
     const elapsed = monotonic() - started;
     const seconds = @as(f64, @floatFromInt(elapsed)) / 1e9;

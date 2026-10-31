@@ -3,24 +3,16 @@ const std = @import("std");
 const linux = std.os.linux;
 const uapi = @import("linux_uapi");
 const storage = @import("storage");
+const syscall_error = @import("syscall_error");
+const syscall = syscall_error.Program("nns-storage-controller");
+const at_fdcwd = linux.AT.FDCWD;
 
-fn fail(comptime format: []const u8, arguments: anytype) noreturn {
-    std.debug.print("nns-storage-controller: " ++ format ++ "\n", arguments);
-    std.process.exit(1);
-}
-
-fn errnoCode(result: usize) ?c_int {
-    const signed: isize = @bitCast(result);
-    return if (signed < 0 and signed >= -4095) @intCast(-signed) else null;
-}
-
-fn checked(result: usize, operation: []const u8) usize {
-    if (errnoCode(result)) |code| fail("{s}: errno {d}", .{ operation, code });
-    return result;
-}
+const fail = syscall.fail;
+const checked = syscall.check;
+const errnoCode = syscall_error.errno;
 
 fn requireDomain() void {
-    const descriptor: i32 = @intCast(checked(linux.openat(-100, "/proc/self/attr/current", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0), "open controller context"));
+    const descriptor: i32 = @intCast(checked(linux.openat(at_fdcwd, "/proc/self/attr/current", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0), "open controller context"));
     defer _ = linux.close(descriptor);
     var context: [256]u8 = undefined;
     const count = checked(linux.read(descriptor, &context, context.len), "read controller context");
@@ -38,7 +30,7 @@ fn requireMountCapability() void {
         fail("only SYS_ADMIN may remain in the controller", .{});
     for (0..64) |capability| {
         const result = linux.syscall5(.prctl, uapi.PR_CAPBSET_READ, capability, 0, 0, 0);
-        if (errnoCode(result) == uapi.EINVAL) break;
+        if (errnoCode(result) == .INVAL) break;
         if (checked(result, "read capability bounding set") != @intFromBool(capability == uapi.CAP_SYS_ADMIN))
             fail("unexpected capability in the bounding set", .{});
         if (checked(linux.syscall5(.prctl, uapi.PR_CAP_AMBIENT, uapi.PR_CAP_AMBIENT_IS_SET, capability, 0, 0), "read ambient capability") != 0)

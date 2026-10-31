@@ -2,10 +2,30 @@
 const std = @import("std");
 const linux = std.os.linux;
 const uapi = @import("linux_uapi");
+const syscall_error = @import("syscall_error");
+const syscall = syscall_error.Program("nns-storage");
 const allocator = std.heap.page_allocator;
 const storage_directory: [:0]const u8 = "/data/nns-storage";
 const target_directory: [:0]const u8 = "/data/nix";
-const at_fdcwd = -100;
+const at_fdcwd = linux.AT.FDCWD;
+
+const fail = syscall.fail;
+const checked = syscall.check;
+const errnoCode = syscall_error.errno;
+
+// Btrfs superblock layout: fsid at 0x20, magic at 0x40, device count at 0x88.
+// The primary superblock sits 64 KiB into the device.
+const btrfs_superblock_offset = 64 * 1024;
+const btrfs_fsid_offset = 0x20;
+const btrfs_magic_offset = 0x40;
+const btrfs_num_devices_offset = 0x88;
+const btrfs_magic = "_BHRfS_M";
+
+// statfs flag bits. Linux exposes no typed wrapper for these in std.
+const statfs_read_only = 1;
+const statfs_nosuid = 2;
+const statfs_nodev = 4;
+const statfs_noexec = 8;
 
 const Configuration = struct {
     image: [256:0]u8 = @splat(0),
@@ -13,24 +33,21 @@ const Configuration = struct {
     subvolume: u64 = 0,
 };
 
-fn fail(comptime format: []const u8, arguments: anytype) noreturn {
-    std.debug.print("nns-storage: " ++ format ++ "\n", arguments);
-    std.process.exit(1);
-}
-
-fn errnoCode(result: usize) ?c_int {
-    const signed: isize = @bitCast(result);
-    return if (signed < 0 and signed >= -4095) @intCast(-signed) else null;
-}
-
-fn checked(result: usize, operation: []const u8) usize {
-    if (errnoCode(result)) |code| fail("{s}: errno {d}", .{ operation, code });
-    return result;
+fn readOnce(descriptor: i32, buffer: []u8) usize {
+    while (true) {
+        const result = linux.read(descriptor, buffer.ptr, buffer.len);
+        if (errnoCode(result) == .INTR) continue;
+        return checked(result, "read descriptor");
+    }
 }
 
 fn message(text: []const u8) void {
-    if (checked(linux.write(1, text.ptr, text.len), "write result") != text.len)
-        fail("short result write", .{});
+    var offset: usize = 0;
+    while (offset < text.len) {
+        const result = linux.write(1, text.ptr + offset, text.len - offset);
+        if (errnoCode(result) == .INTR) continue;
+        offset += checked(result, "write result");
+    }
 }
 
 fn openAt(directory: i32, path: [*:0]const u8, flags: linux.O) usize {
@@ -41,7 +58,7 @@ fn readAll(descriptor: i32) []u8 {
     var contents = std.ArrayList(u8).empty;
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const count = checked(linux.read(descriptor, &buffer, buffer.len), "read descriptor");
+        const count = readOnce(descriptor, &buffer);
         if (count == 0) break;
         contents.appendSlice(allocator, buffer[0..count]) catch fail("allocation failed", .{});
     }
@@ -61,7 +78,7 @@ fn statAt(directory: i32, path: [*:0]const u8, flags: u32) uapi.struct_statx {
 }
 
 fn status(descriptor: i32) uapi.struct_statx {
-    return statAt(descriptor, "", 0x1000); // AT_EMPTY_PATH
+    return statAt(descriptor, "", linux.AT.EMPTY_PATH);
 }
 
 fn requirePrivate(metadata: uapi.struct_statx, directory: bool) void {
@@ -80,8 +97,8 @@ fn requireAvailableKey(directory: i32) void {
     policy.policy_size = @sizeOf(@TypeOf(policy.policy));
     if (errnoCode(ioctl(directory, uapi.NNS_FS_IOC_GET_ENCRYPTION_POLICY_EX, @intFromPtr(&policy)))) |code| {
         switch (code) {
-            uapi.ENODATA, uapi.ENOTTY, uapi.EOPNOTSUPP => return,
-            else => fail("read storage encryption policy: errno {d}", .{code}),
+            .NODATA, .NOTTY, .OPNOTSUPP => return,
+            else => fail("read storage encryption policy: {t}", .{code}),
         }
     }
     var key = std.mem.zeroes(uapi.struct_fscrypt_get_key_status_arg);
@@ -124,11 +141,11 @@ fn parseUuid(text: []const u8) [16]u8 {
 fn readConfiguration(directory: i32) ?Configuration {
     const opened = openAt(directory, "backing.conf", .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .NONBLOCK = true, .NOATIME = true, .CLOEXEC = true });
     if (errnoCode(opened)) |code| {
-        if (code == uapi.ENOENT) {
+        if (code == .NOENT) {
             requireAvailableKey(directory);
             return null;
         }
-        fail("open backing.conf: errno {d}", .{code});
+        fail("open backing.conf: {t}", .{code});
     }
     const descriptor: i32 = @intCast(opened);
     defer _ = linux.close(descriptor);
@@ -138,7 +155,7 @@ fn readConfiguration(directory: i32) ?Configuration {
     var buffer: [1025]u8 = undefined;
     var length: usize = 0;
     while (length < buffer.len) {
-        const count = checked(linux.read(descriptor, buffer[length..].ptr, buffer.len - length), "read configuration");
+        const count = readOnce(descriptor, buffer[length..]);
         if (count == 0) break;
         length += count;
     }
@@ -205,8 +222,8 @@ test "inherited reference rejects a private mount namespace" {
     defer _ = linux.close(descriptor);
     const result = linux.syscall1(.unshare, linux.CLONE.NEWUSER | linux.CLONE.NEWNS);
     if (errnoCode(result)) |code| {
-        if (code == uapi.EPERM) return error.SkipZigTest;
-        fail("create test namespace: errno {d}", .{code});
+        if (code == .PERM) return error.SkipZigTest;
+        fail("create test namespace: {t}", .{code});
     }
     try std.testing.expect(!inInitNamespace(descriptor));
 }
@@ -230,6 +247,7 @@ fn requireEmpty(descriptor: i32) void {
     }
 }
 
+// gnu_dev_makedev encoding: Linux keeps the legacy split layout.
 fn deviceNumber(major: u32, minor: u32) u64 {
     return (@as(u64, major & 0xfffff000) << 32) | (@as(u64, major & 0xfff) << 8) |
         (@as(u64, minor & 0xffffff00) << 12) | @as(u64, minor & 0xff);
@@ -251,7 +269,7 @@ fn verifyMount(configuration: Configuration, image: uapi.struct_statx) bool {
     if (errnoCode(linux.syscall2(.fstatfs, @intCast(target), @intFromPtr(&filesystem_status))) != null) return false;
     if (subvolume.treeid != configuration.subvolume or (subvolume.flags & uapi.BTRFS_SUBVOL_RDONLY) != 0 or
         root.stx_ino != 256 or root.stx_uid != 0 or root.stx_gid != 0 or (root.stx_mode & 0o022) != 0 or
-        (filesystem_status.f_flags & 15) != 6) return false;
+        (filesystem_status.f_flags & (statfs_read_only | statfs_nosuid | statfs_nodev | statfs_noexec)) != (statfs_nosuid | statfs_nodev)) return false;
     var device = std.mem.zeroes(uapi.struct_btrfs_ioctl_dev_info_args);
     device.devid = filesystem.max_id;
     if (errnoCode(ioctl(target, uapi.BTRFS_IOC_DEV_INFO, @intFromPtr(&device))) != null) return false;
@@ -275,13 +293,13 @@ fn attachLoop(image: i32, path_buffer: *[64]u8) i32 {
         const number = checked(ioctl(control, uapi.LOOP_CTL_GET_FREE, 0), "allocate loop device");
         var path = std.mem.printSentinel(path_buffer, "/dev/block/loop{d}", .{number}, 0) catch unreachable;
         var opened = openAt(at_fdcwd, path, .{ .ACCMODE = .RDWR, .NOFOLLOW = true, .CLOEXEC = true });
-        if (errnoCode(opened) == uapi.ENOENT) {
+        if (errnoCode(opened) == .NOENT) {
             path = std.mem.printSentinel(path_buffer, "/dev/loop{d}", .{number}, 0) catch unreachable;
             opened = openAt(at_fdcwd, path, .{ .ACCMODE = .RDWR, .NOFOLLOW = true, .CLOEXEC = true });
         }
-        if (errnoCode(opened) == uapi.ENOENT) {
-            const delay = [2]i64{ 0, 100_000_000 };
-            _ = linux.syscall4(.clock_nanosleep, 1, 0, @intFromPtr(&delay), 0);
+        if (errnoCode(opened) == .NOENT) {
+            var delay: linux.timespec = .{ .sec = 0, .nsec = 100_000_000 };
+            _ = linux.clock_nanosleep(.MONOTONIC, .{ .ABSTIME = false }, &delay, null);
             continue;
         }
         const loop: i32 = @intCast(checked(opened, "open loop device"));
@@ -301,8 +319,8 @@ fn attachLoop(image: i32, path_buffer: *[64]u8) i32 {
         const result = ioctl(loop, uapi.LOOP_CONFIGURE, @intFromPtr(&setup));
         if (errnoCode(result)) |code| {
             _ = linux.close(loop);
-            if (code == uapi.EBUSY) continue;
-            fail("configure loop device: errno {d}", .{code});
+            if (code == .BUSY) continue;
+            fail("configure loop device: {t}", .{code});
         }
         return loop;
     }
@@ -317,7 +335,7 @@ pub fn run(arguments: []const [*:0]const u8, initial_namespace: ?i32) void {
     if (initial_namespace != null and !inInitNamespace(initial_namespace)) fail("init mount namespace is required", .{});
     const opened = openAt(at_fdcwd, storage_directory, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .NOFOLLOW = true, .CLOEXEC = true });
     if (errnoCode(opened)) |code| {
-        if (code != uapi.ENOENT) fail("open storage directory: errno {d}", .{code});
+        if (code != .NOENT) fail("open storage directory: {t}", .{code});
         if (mode) message("directory\n");
         return;
     }
@@ -340,9 +358,11 @@ pub fn run(arguments: []const [*:0]const u8, initial_namespace: ?i32) void {
     const image_status = status(image);
     requirePrivate(image_status, false);
     var superblock: [4096]u8 = undefined;
-    if (checked(linux.syscall4(.pread64, @intCast(image), @intFromPtr(&superblock), superblock.len, 65536), "read Btrfs primary superblock") != superblock.len)
+    if (checked(linux.syscall4(.pread64, @intCast(image), @intFromPtr(&superblock), superblock.len, btrfs_superblock_offset), "read Btrfs primary superblock") != superblock.len)
         fail("cannot read Btrfs primary superblock", .{});
-    if (!std.mem.eql(u8, superblock[0x40..0x48], "_BHRfS_M") or !std.mem.eql(u8, superblock[0x20..0x30], &configuration.uuid) or std.mem.readInt(u64, superblock[0x88..][0..8], .little) != 1)
+    if (!std.mem.eql(u8, superblock[btrfs_magic_offset..][0..btrfs_magic.len], btrfs_magic) or
+        !std.mem.eql(u8, superblock[btrfs_fsid_offset..][0..configuration.uuid.len], &configuration.uuid) or
+        std.mem.readInt(u64, superblock[btrfs_num_devices_offset..][0..8], .little) != 1)
         fail("image must contain the selected single-device Btrfs filesystem", .{});
     if (mountCount(target_directory) != 0) {
         if (!verifyMount(configuration, image_status)) fail("conflicting storage mount, image, subvolume or flags", .{});

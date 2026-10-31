@@ -20,8 +20,11 @@ stdenvNoCC.mkDerivation {
     fileset = lib.fileset.unions [
       ../build.zig
       ../build.zig.zon
-      ../tests/android/fscrypt-policy.c
-      ../tests/android/storage-execution.c
+      ../module/src/storage-linux.h
+      ../module/src/syscall-error.zig
+      ../tests/android/bind-remount.zig
+      ../tests/android/fscrypt-policy.zig
+      ../tests/android/storage-execution.zig
     ];
   };
   nativeBuildInputs = [ zig ];

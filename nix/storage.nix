@@ -21,6 +21,7 @@ stdenvNoCC.mkDerivation {
       ../build.zig
       ../build.zig.zon
       ../module/src/nns-storage.zig
+      ../module/src/syscall-error.zig
       ../module/src/storage-linux.h
       ../integrations/module/storage/supervisor.zig
       ../integrations/module/storage/controller.zig

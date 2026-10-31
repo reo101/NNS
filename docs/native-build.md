@@ -12,13 +12,15 @@ nix build .#nns-native
 nix build .#nix-enter .#nix-enter-host
 nix build .#nns-dns
 nix build .#nns-storage .#nns-storage-host
+nix build .#nns-rom-mount .#nns-rom-mount-host
 nix build .#checks.x86_64-linux.nns-native
 nix run .#test-userns
 ```
 
 `nns-native` builds the complete ARM64 artifact set. The individual packages
 still use separate derivations and source file sets. A launcher build does
-not require the Android SDK or Linux headers.
+not require the Android SDK or Linux headers. The mount package also provides
+its native test executables through its `tests` output.
 
 `build.zig.zon` pins the official external `translate-c` package. Its pinned
 `aro` dependency supplies the C parser. `nix/zig-dependencies.nix` fetches the
@@ -46,8 +48,10 @@ Artifacts install under `zig-out/`. Use `--prefix` to select another directory.
 | `dns` | Bionic resolver and libc-neutral preload library | Android sysroot |
 | `rish-terminal` | Android terminal supervisor | Android sysroot |
 | `service-control` | Experimental runit FIFO client | None |
-| `storage` | Static storage executable | Linux headers |
-| `native-probes` | Static fscrypt-policy and storage-execution probes | Optional Linux header override |
+| `storage` | Static storage executable and position-independent controller archive | Linux headers |
+| `mount` | Static C mount helper | None |
+| `mount-fixtures` | Mount preparation and race-test executables | None |
+| `native-probes` | Static bind-remount, fscrypt-policy, and storage-execution probes | Linux headers |
 | `all` | All the above | Android sysroot and Linux headers |
 
 `zig build` defaults to `all`. Pass `-Dandroid-sysroot=/path/to/sysroot`
@@ -58,9 +62,10 @@ the steps that require them. `-Dtarget` selects the Linux target;
 
 ## Tests
 
-`test` runs the launcher ownership unit test, DNS tests, terminal tests,
-and real-runit FIFO tests. Its individual steps are `test-nix-enter`,
-`test-dns`, `test-rish-terminal`, and `test-service-control`.
+`test` runs the raw syscall decoding unit test, the launcher ownership unit
+test, DNS tests, terminal tests, and real-runit FIFO tests. Its individual
+steps are `test-syscall-error`, `test-nix-enter`, `test-dns`,
+`test-rish-terminal`, and `test-service-control`.
 
 `test-userns` runs separately because it needs user and mount namespaces.
 The Nix runner builds the production host launcher in the sandbox and runs
@@ -68,9 +73,9 @@ these tests outside it. Android VM tests remain separate.
 
 ## Allocation ownership
 
-Account registry parsing uses `BufferFirstAllocator` for temporary bytes.
-It falls back to the caller allocator when the 4096-byte buffer is too small.
-The returned account name belongs to the caller allocator, not that buffer.
+Account registry parsing reads into one 64 KiB caller-allocator buffer and
+rejects a larger registry instead of growing without a bound. The returned
+account name belongs to the caller allocator, not to that buffer.
 A unit test uses `SafeAllocator` to check environment allocation ownership.
 
 Exported DNS results still use caller-libc `calloc/free`. glibc frees the

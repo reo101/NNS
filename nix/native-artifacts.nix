@@ -32,6 +32,7 @@ stdenvNoCC.mkDerivation {
       ../module/src/dns-resolver.zig
       ../module/src/dns-resolver.h
       ../module/src/nns-storage.zig
+      ../module/src/syscall-error.zig
       ../integrations/module/storage/supervisor.zig
       ../integrations/module/storage/controller.zig
       ../tests/module-storage/handoff.zig
@@ -39,9 +40,9 @@ stdenvNoCC.mkDerivation {
       ../integrations/shizuku/rish-terminal.zig
       ../integrations/shizuku/rish-terminal.h
       ../experiments/activation/service-control.zig
-      ../experiments/activation/service-control.h
-      ../tests/android/fscrypt-policy.c
-      ../tests/android/storage-execution.c
+      ../tests/android/bind-remount.zig
+      ../tests/android/fscrypt-policy.zig
+      ../tests/android/storage-execution.zig
     ];
   };
   nativeBuildInputs = [ zig ];

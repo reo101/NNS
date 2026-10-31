@@ -7,7 +7,7 @@ let
       ../../build.zig
       ../../build.zig.zon
       ./service-control.zig
-      ./service-control.h
+      ../../module/src/syscall-error.zig
     ];
   };
 in

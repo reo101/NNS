@@ -9,10 +9,10 @@ let
       ../module/src/nix-enter.zig
       ../module/src/dns-bridge.zig
       ../module/src/dns-wire.zig
+      ../module/src/syscall-error.zig
       ../integrations/shizuku/rish-terminal.zig
       ../integrations/shizuku/rish-terminal.h
       ../experiments/activation/service-control.zig
-      ../experiments/activation/service-control.h
       ../tests/test-dns.py
       ../tests/test-rish-terminal.py
       ../experiments/activation/test-service-control.py

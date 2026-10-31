@@ -17,6 +17,7 @@ stdenvNoCC.mkDerivation {
       ../build.zig
       ../build.zig.zon
       ../module/src/nix-enter.zig
+      ../module/src/syscall-error.zig
     ];
   };
   dontConfigure = true;

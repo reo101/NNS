@@ -12,18 +12,35 @@ pub fn build(b: *std.Build) void {
     const all = b.step("all", "Install all native artifacts (requires Android sysroot and Linux headers)");
     const tests = b.step("test", "Run sandbox-safe native tests");
     const host = b.resolveTargetQuery(.{ .cpu_arch = b.graph.host.result.cpu.arch, .os_tag = .linux, .abi = .musl });
+    const syscall_error_target = b.createModule(.{
+        .root_source_file = b.path("module/src/syscall-error.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const syscall_error_host = b.createModule(.{
+        .root_source_file = b.path("module/src/syscall-error.zig"),
+        .target = host,
+        .optimize = .debug,
+    });
+    const syscall_error_tests = b.addTest(.{ .root_module = syscall_error_host });
+    const test_syscall_error = b.step("test-syscall-error", "Run raw syscall result decoding tests");
+    test_syscall_error.dependOn(&b.addRunArtifact(syscall_error_tests).step);
+    tests.dependOn(test_syscall_error);
 
     const launcher = executable(b, "nix-enter", "module/src/nix-enter.zig", target, optimize, false);
+    launcher.root_module.addImport("syscall_error", syscall_error_target);
     install(b, all, "nix-enter", launcher);
     const launcher_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("module/src/nix-enter.zig"),
         .target = host,
         .optimize = .debug,
     }) });
+    launcher_tests.root_module.addImport("syscall_error", syscall_error_host);
     const test_launcher = b.step("test-nix-enter", "Run launcher allocation and environment unit tests");
     test_launcher.dependOn(&b.addRunArtifact(launcher_tests).step);
     tests.dependOn(test_launcher);
     const namespace_launcher = executable(b, "nix-enter-test", "module/src/nix-enter.zig", host, .debug, false);
+    namespace_launcher.root_module.addImport("syscall_error", syscall_error_host);
     const namespace_tests = pythonTest(b, "tests/test-userns.py", namespace_launcher);
     b.step("test-userns", "Run launcher tests outside the Nix sandbox (requires user namespaces)").dependOn(&namespace_tests.step);
 
@@ -85,11 +102,11 @@ pub fn build(b: *std.Build) void {
     const test_terminal = b.step("test-rish-terminal", "Run native terminal transport tests");
     test_terminal.dependOn(&pythonTest(b, "tests/test-rish-terminal.py", terminal).step);
     tests.dependOn(test_terminal);
-    const control = controlExecutable(b, translate_c, "nns-service-control", target, optimize);
+    const control = controlExecutable(b, "nns-service-control", target, optimize);
     install(b, all, "service-control", control);
     const test_control = b.step("test-service-control", "Run the FIFO client against real runsv");
     const control_run = b.addSystemCommand(&.{"env"});
-    control_run.addArtifactArg2(controlExecutable(b, translate_c, "nns-service-control-test", host, .debug), .{ .prefix = "NNS_SERVICE_CONTROL=" });
+    control_run.addArtifactArg2(controlExecutable(b, "nns-service-control-test", host, .debug), .{ .prefix = "NNS_SERVICE_CONTROL=" });
     control_run.addArg("python3");
     control_run.addFileArg2(b.path("experiments/activation/test-service-control.py"), .{});
     test_control.dependOn(&control_run.step);
@@ -112,40 +129,47 @@ pub fn build(b: *std.Build) void {
             .pic = true,
         });
         storage_module.addImport("linux_uapi", translation.mod);
+        storage_module.addImport("syscall_error", syscall_error_target);
         const storage_namespace_tests = b.addTest(.{ .root_module = storage_module });
         const test_storage_namespace = b.step("test-storage-namespace", "Test inherited storage namespace identity");
         test_storage_namespace.dependOn(&b.addRunArtifact(storage_namespace_tests).step);
         const supervisor = executable(b, "nns-storage-supervisor", "integrations/module/storage/supervisor.zig", target, optimize, false);
         supervisor.root_module.addImport("linux_uapi", translation.mod);
+        supervisor.root_module.addImport("syscall_error", syscall_error_target);
         storage_step.dependOn(&b.addInstallArtifact(supervisor, .{}).step);
         const module_controller = executable(b, "nns-storage-module-controller", "integrations/module/storage/controller.zig", target, optimize, false);
         module_controller.root_module.addImport("linux_uapi", translation.mod);
+        module_controller.root_module.addImport("syscall_error", syscall_error_target);
         module_controller.root_module.addImport("storage", storage_module);
         storage_step.dependOn(&b.addInstallArtifact(module_controller, .{}).step);
         const handoff_fixture = executable(b, "nns-storage-handoff-fixture", "tests/module-storage/handoff.zig", target, optimize, false);
         handoff_fixture.root_module.addImport("linux_uapi", translation.mod);
+        handoff_fixture.root_module.addImport("syscall_error", syscall_error_target);
         const handoff_fixture_step = b.step("storage-handoff-fixture", "Install the storage handoff test executable");
         handoff_fixture_step.dependOn(&b.addInstallArtifact(handoff_fixture, .{}).step);
         const throughput_fixture = executable(b, "nns-storage-throughput", "benchmarks/storage-backends/throughput-probe.zig", target, optimize, true);
         throughput_fixture.root_module.addImport("linux_uapi", translation.mod);
+        throughput_fixture.root_module.addImport("syscall_error", syscall_error_target);
         const throughput_fixture_step = b.step("storage-throughput-fixture", "Install the storage throughput probe");
         throughput_fixture_step.dependOn(&b.addInstallArtifact(throughput_fixture, .{}).step);
         const bench_mount = executable(b, "nns-storage-bench-mount", "benchmarks/storage-backends/bench-mount.zig", target, optimize, false);
         bench_mount.root_module.addImport("linux_uapi", translation.mod);
+        bench_mount.root_module.addImport("syscall_error", syscall_error_target);
         throughput_fixture_step.dependOn(&b.addInstallArtifact(bench_mount, .{}).step);
         const storage = executable(b, "nns-storage", "module/src/nns-storage.zig", target, optimize, false);
         storage.root_module.addImport("linux_uapi", translation.mod);
+        storage.root_module.addImport("syscall_error", syscall_error_target);
         storage_step.dependOn(&b.addInstallArtifact(storage, .{}).step);
+        const probes = b.step("native-probes", "Install static namespace and storage probes");
+        all.dependOn(probes);
+        inline for (.{ "bind-remount", "fscrypt-policy", "storage-execution" }) |name| {
+            const probe = executable(b, name, b.fmt("tests/android/{s}.zig", .{name}), target, optimize, false);
+            probe.root_module.addImport("linux_uapi", translation.mod);
+            probe.root_module.addImport("syscall_error", syscall_error_target);
+            install(b, probes, name, probe);
+        }
     } else storage_step.dependOn(&b.addFail("pass -Dlinux-headers=/path/to/target/linux/include").step);
 
-    const probes = b.step("native-probes", "Install static namespace and storage probes");
-    all.dependOn(probes);
-    inline for (.{ "fscrypt-policy", "storage-execution" }) |name| {
-        const probe = cExecutable(b, name, target, optimize, &.{b.fmt("tests/android/{s}.c", .{name})});
-        probe.root_module.addCMacro("_GNU_SOURCE", "1");
-        if (headers) |include| probe.root_module.addSystemIncludePath(.{ .cwd_relative = include });
-        install(b, probes, name, probe);
-    }
     b.getInstallStep().dependOn(all);
 }
 
@@ -179,11 +203,8 @@ fn terminalExecutable(b: *std.Build, translate_c: *std.Build.Dependency, name: [
     return exe;
 }
 
-fn controlExecutable(b: *std.Build, translate_c: *std.Build.Dependency, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Step.Compile {
-    const exe = executable(b, name, "experiments/activation/service-control.zig", target, optimize, true);
-    const translation: Translator = .init(translate_c, .{ .c_source_file = b.path("experiments/activation/service-control.h"), .target = target, .optimize = optimize });
-    exe.root_module.addImport("c", translation.mod);
-    return exe;
+fn controlExecutable(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Step.Compile {
+    return executable(b, name, "experiments/activation/service-control.zig", target, optimize, true);
 }
 
 fn cExecutable(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, sources: []const []const u8) *std.Build.Step.Compile {

@@ -95,6 +95,7 @@ shell does not start a second Emacs server.
 - [docs/nns-systems.md](docs/nns-systems.md): system generations, consumers, and deploy-rs
 - [docs/build-isolation.md](docs/build-isolation.md): current build risks and deferred designs
 - [benchmarks/storage-backends](benchmarks/storage-backends/README.md): measured Btrfs backing cost and durability, and why directory mode remains
+- [integrations/rom/nfc](integrations/rom/nfc/README.md): NFC listen identity limits and the listen identity probe
 
 - [module/README.md](module/README.md) — mechanism, device constraints,
   sessions & supervised services (in progress)

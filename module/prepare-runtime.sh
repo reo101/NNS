@@ -2,7 +2,13 @@
 # Prepare module-owned runtime files. The launcher still supplies session views.
 MODDIR=${0%/*}
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin
+. "$MODDIR/mount-ownership.sh" || exit 1
+nns_mount_mode || exit 1
 "$MODDIR/bin/nns-storage" --check || exit 1
+if [ "$NNS_MOUNT_MODE" = rom ]; then
+  nns_check_global_mount || exit 1
+  umask 0022
+fi
 LOG=/data/local/tmp/nix-post-fs-data.log
 
 exec > $LOG 2>&1
@@ -13,11 +19,13 @@ mkdir -p /data/nix/etc/nix /data/nix/etc/profile.d /data/nix/home /data/nix/var/
 # Boot is a hard reset for the daemon pidfile: nothing alive survived, and
 # a recycled pid fooled the service.sh gate once (landed on Bitwarden).
 rm -f /data/nix/var/nix/daemon.pid
-chmod 755 /data/nix /data/nix/store /data/nix/var
-# Owner too: something in this ROM's early /data pass chowns unknown
-# directories to bluetooth:960, and sshd StrictModes rejects any
-# AuthorizedKeysFile path component not owned by root or the user.
-chown 0:0 /data/nix
+if [ "$NNS_MOUNT_MODE" != rom ]; then
+  chmod 755 /data/nix /data/nix/store /data/nix/var
+  # Owner too: something in this ROM's early /data pass chowns unknown
+  # directories to bluetooth:960, and sshd StrictModes rejects any
+  # AuthorizedKeysFile path component not owned by root or the user.
+  chown 0:0 /data/nix
+fi
 . "$MODDIR/system-generation.sh"
 NNS_SYSTEM_GENERATION=false
 if nns_system_selected; then NNS_SYSTEM_GENERATION=true; fi
@@ -40,7 +48,9 @@ chmod 755 /data/nix/bin/nix-enter.new
 # burn 332 seconds in per-path denial+printk loops over the store.
 # nix-enter keeps nns_exec - init cannot relabel it (relabelfrom denied),
 # which is precisely what preserves the app -> nns_app transition.
-chcon u:object_r:system_data_file:s0 /data/nix || exit 1
+if [ "$NNS_MOUNT_MODE" != rom ]; then
+  chcon u:object_r:system_data_file:s0 /data/nix || exit 1
+fi
 chcon u:object_r:system_data_file:s0 /data/nix/bin || exit 1
 chcon u:object_r:nns_exec:s0 /data/nix/bin/nix-enter.new || exit 1
 mv -f /data/nix/bin/nix-enter.new /data/nix/bin/nix-enter

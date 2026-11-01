@@ -1,0 +1,50 @@
+# platform-policy.json declares nns_storage and nns_storage_file before system_ext.
+type nns_storage_exec, exec_type, file_type, system_file_type;
+type nns_storage_config_file, file_type, data_file_type, core_data_file_type;
+type nns_storage_image_file, file_type, data_file_type, core_data_file_type;
+init_daemon_domain(nns_storage)
+
+# Only the controller publishes readiness after successful storage validation.
+system_internal_prop(nns_storage_state_prop)
+set_prop(nns_storage, nns_storage_state_prop)
+get_prop(init, nns_storage_state_prop)
+get_prop(shell, nns_storage_state_prop)
+
+allow nns_storage self:capability sys_admin;
+allow nns_storage rootfs:dir search;
+allow nns_storage system_data_root_file:dir search;
+allow nns_storage nns_storage_file:dir { getattr open read search lock ioctl };
+# Read the policy and key status before interpreting missing configuration.
+allowxperm nns_storage nns_storage_file:dir ioctl { 0x6616 0x661a };
+allow nns_storage nns_storage_config_file:file { getattr open read };
+allow nns_storage nns_storage_image_file:file { getattr open read write };
+# Loop workers use the pinned image descriptor, not the controller's domain.
+allow kernel nns_storage_image_file:file { getattr read write };
+
+allow nns_storage device:dir search;
+allow nns_storage block_device:dir search;
+allow nns_storage loop_control_device:chr_file { getattr open read write ioctl };
+allowxperm nns_storage loop_control_device:chr_file ioctl { 0x4c82 };
+allow nns_storage loop_device:blk_file { getattr open read write ioctl };
+allowxperm nns_storage loop_device:blk_file ioctl { 0x4c05 0x4c0a };
+
+allow nns_storage sysfs:dir search;
+allow nns_storage sysfs:lnk_file read;
+allow nns_storage sysfs_devices_block:dir search;
+allow nns_storage sysfs_loop:dir search;
+allow nns_storage sysfs_loop:file { getattr open read };
+
+# Init passes its mount namespace descriptor; no PID-1 inspection is needed.
+allow nns_storage proc:dir search;
+allow nns_storage self:dir search;
+allow nns_storage self:file { getattr open read };
+allow nns_storage self:lnk_file read;
+# Keep the read-only nsfs descriptor across exec; do not permit unlabeled opens.
+allow nns_storage unlabeled:file { getattr read };
+allow nns_storage init:fd use;
+allow nns_storage { kmsg_device kmsg_debug_device }:chr_file write;
+
+# Mount only. No unmount, remount, data repair, relabel or content-write grant.
+allow nns_storage labeledfs:filesystem { getattr mount };
+allow nns_storage system_data_file:dir { getattr open read search mounton ioctl };
+allowxperm nns_storage system_data_file:dir ioctl { 0x941e 0x941f 0x943c };

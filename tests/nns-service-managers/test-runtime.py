@@ -360,6 +360,21 @@ exec "$@"
             self.assert_owner()
             self.assertEqual((self.state / 'manager-generation').resolve(), self.generation)
 
+    def test_legacy_previous_generation_without_manager_file(self):
+        with tempfile.TemporaryDirectory(dir=BASE) as directory:
+            legacy = Path(directory) / 'legacy'
+            shutil.copytree(self.generation, legacy, symlinks=True)
+            (legacy / 'service-manager').unlink()
+            (legacy / 'service-control').unlink()
+            (legacy / 'service-control').write_text(f'#!{shutil.which("sh")}\nexit 0\n')
+            (legacy / 'service-control').chmod(0o755)
+            self.command([self.current / 'service-control', 'stop'])
+            (self.state / 'manager-generation').unlink()
+            (self.state / 'manager-generation').symlink_to(legacy)
+            self.activate(self.generation)
+            self.assert_owner()
+            self.assertEqual((self.state / 'manager-generation').resolve(), self.generation)
+
     def test_failed_native_reconciliation_can_retry_the_same_generation(self):
         if self.backend == 'runit':
             self.skipTest('native update intent')

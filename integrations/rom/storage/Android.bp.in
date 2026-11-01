@@ -1,0 +1,19 @@
+// Nix supplies the static Zig archives. Soong supplies platform Bionic.
+cc_prebuilt_library_static {
+    name: "libnns_storage_controller",
+    compile_multilib: "64",
+    arch: {
+        arm64: { srcs: ["libnns-storage-controller-arm64.a"] },
+        x86_64: { srcs: ["libnns-storage-controller-x86_64.a"] },
+    },
+    stl: "none",
+}
+
+cc_binary {
+    name: "nns-storage",
+    whole_static_libs: ["libnns_storage_controller"],
+    static_executable: true,
+    compile_multilib: "64",
+    stl: "none",
+    init_rc: ["init.nns-storage.rc"],
+}

@@ -11,10 +11,9 @@ PROOFS = '\n'.join([
     'nns-guest: absolute store symlink',
     'nns-guest: relative store symlink',
     'nns-guest: STORE SYMLINK READS SUCCEEDED',
-    'nns-guest: PHONE DAEMON REACHABLE',
+    'nns-guest: GUEST STORE READY',
     'nns-guest: PACKAGE REALISATION AND EXECUTION SUCCEEDED',
-    'nns-guest: DAEMON BUILD AND STORE VISIBILITY SUCCEEDED',
-    'nns-guest: SHARED STORE WRITE REJECTED',
+    'nns-guest: GUEST BUILD AND PHONE PUBLICATION SUCCEEDED',
     'nns-guest: GUEST DNS AND HTTPS SUCCEEDED',
 ])
 TARGET = 'Queued start job for default target Multi-User System.'

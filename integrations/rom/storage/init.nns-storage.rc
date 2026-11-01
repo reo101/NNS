@@ -1,0 +1,8 @@
+service nns-storage /system/bin/nns-storage
+    user root
+    group root system
+    capabilities SYS_ADMIN
+    file /proc/1/ns/mnt r
+    disabled
+    oneshot
+    stdio_to_kmsg

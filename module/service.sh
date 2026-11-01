@@ -9,9 +9,15 @@
 # the label from their parent dirs. Label only public store/config, never app data.
 MODDIR=${0%/*}
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin
+. "$MODDIR/mount-ownership.sh" || exit 1
+nns_mount_mode || exit 1
 LOG=/data/local/tmp/nix-service.log
 exec > "$LOG" 2>&1
 
+if [ "$NNS_MOUNT_MODE" = rom ]; then
+  nns_check_global_mount || exit 1
+  sh "$MODDIR/prepare-runtime.sh" || exit 1
+else
 storage_mode=$("$MODDIR/bin/nns-storage" --mode) || exit 1
 if [ "$storage_mode" = btrfs ]; then
   "$MODDIR/bin/nns-storage" || exit 1
@@ -27,6 +33,7 @@ done
 # too. Readable by every domain either way (system_data_file is open-read).
 find /data/nix/var/nix/profiles -maxdepth 1 -type l \
   -exec chcon -h u:object_r:system_data_file:s0 {} +
+fi
 
 /system/bin/sh /data/adb/modules/nix/stage-android-runtime.sh
 . /data/adb/modules/nix/system-generation.sh

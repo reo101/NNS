@@ -1,0 +1,45 @@
+# VM fixtures only. Never add this directory to a production device policy.
+type nns_fixture, domain, coredomain;
+type nns_fixture_exec, exec_type, file_type, system_file_type;
+type nns_fixture_report_file, file_type, data_file_type, core_data_file_type;
+type nns_fixture_content_file, file_type, data_file_type, core_data_file_type;
+type nns_fixture_backing_file, file_type, data_file_type, core_data_file_type;
+init_daemon_domain(nns_fixture)
+
+allow nns_fixture self:capability { chown fowner };
+allow nns_fixture system_data_root_file:dir search;
+allow nns_fixture system_data_file:dir { getattr open read search };
+allow nns_fixture nns_fixture_backing_file:dir { getattr open read search write add_name setattr ioctl };
+# Policy assignment remains in native init. The fixture can only read it.
+allowxperm nns_fixture nns_fixture_backing_file:dir ioctl { 0x6616 };
+allow nns_mount nns_fixture_backing_file:dir { getattr open read search lock };
+# Init alone constructs stacked mounts for refusal tests.
+allow init nns_fixture_backing_file:dir mounton;
+# Only init enters toolbox. Moves have no content-copy or directory-creation grant.
+allow toolbox nns_fixture_backing_file:dir { getattr open read search write rename reparent };
+allow toolbox nns_fixture_report_file:dir { getattr search write add_name remove_name };
+allow toolbox system_data_root_file:dir add_name;
+# Only this fixed fixture filename receives the writable content type.
+type_transition nns_fixture nns_fixture_backing_file:file nns_fixture_content_file "nns-fixture.bin";
+allow nns_fixture nns_fixture_content_file:file { create getattr open read write setattr };
+allow nns_fixture nns_fixture_report_file:dir { getattr open read search write add_name remove_name };
+allow nns_fixture nns_fixture_report_file:file { create getattr open read write setattr rename unlink };
+
+allow nns_fixture proc:dir search;
+allow nns_fixture self:dir search;
+allow nns_fixture self:file { getattr open read };
+allow nns_fixture self:lnk_file read;
+allow nns_fixture selinuxfs:file { getattr open read };
+allow nns_fixture init:fd use;
+allow nns_fixture { kmsg_device kmsg_debug_device }:chr_file write;
+
+allow shell nns_fixture_report_file:dir { getattr open read search };
+allow shell nns_fixture_report_file:file { getattr open read };
+system_internal_prop(nns_fixture_control_prop)
+set_prop(shell, nns_fixture_control_prop)
+get_prop(init, nns_fixture_control_prop)
+
+# Only the validated fixture process can request the native encryption step.
+system_internal_prop(nns_fixture_state_prop)
+set_prop(nns_fixture, nns_fixture_state_prop)
+set_prop(init, nns_fixture_state_prop)

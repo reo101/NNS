@@ -9,7 +9,7 @@ arch = sys.argv[2] if len(sys.argv) > 2 else 'arm64'
 machine = {'arm64': 183, 'x64': 62}[arch]
 with zipfile.ZipFile(sys.argv[1]) as z:
     names = set(z.namelist())
-    required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh', 'skip_mount',
+    required = {'module.prop', 'customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'mount-ownership.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh', 'skip_mount',
                 'sepolicy.rule', 'bin/nix-enter', 'bin/nns-storage', 'bin/nns-resolver', 'bin/rish', 'bin/su', 'bin/sudo',
                 'bin/rish-probe', 'bin/nns-rish-terminal', 'lib/libnns-dns.so', 'lib/rish.dex', 'etc/profile', 'etc/nix/nix.conf'}
     assert names == required, names ^ required
@@ -25,9 +25,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
         assert not Path(name).is_absolute() and '..' not in Path(name).parts
         assert z.getinfo(name).date_time == (1980, 1, 1, 0, 0, 0)
     for name in ('bin/nix-enter', 'bin/nns-storage', 'bin/nns-resolver', 'bin/nns-rish-terminal', 'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe',
-                 'customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh'):
+                 'customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'mount-ownership.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh'):
         assert (z.getinfo(name).external_attr >> 16) & stat.S_IXUSR, name
-    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh',
+    for name in ('customize.sh', 'post-fs-data.sh', 'service.sh', 'prepare-runtime.sh', 'mount-ownership.sh', 'stage-etc.sh', 'stage-android-runtime.sh', 'system-generation.sh',
                  'bin/rish', 'bin/su', 'bin/sudo', 'bin/rish-probe'):
         assert z.read(name).startswith(b'#!/system/bin/sh\n')
         assert b'@APP_' not in z.read(name), name

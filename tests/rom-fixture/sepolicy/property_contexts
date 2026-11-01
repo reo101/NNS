@@ -1,0 +1,3 @@
+sys.nns.fixture.action u:object_r:nns_fixture_control_prop:s0 exact enum inspect prepare-encrypted restart-mount conflicting-mount stacked-mount restore-mount invalid-backing restore-backing
+sys.nns.fixture.ready u:object_r:nns_fixture_state_prop:s0 exact bool
+sys.nns.fixture.moved u:object_r:nns_fixture_state_prop:s0 exact bool

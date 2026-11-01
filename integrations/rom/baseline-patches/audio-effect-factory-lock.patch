@@ -1,0 +1,10 @@
+--- a/hardware/interfaces/audio/aidl/default/EffectFactory.cpp
++++ b/hardware/interfaces/audio/aidl/default/EffectFactory.cpp
+@@ -299,6 +299,7 @@
+ }
+ 
+ void Factory::loadHardcodedEffects() {
++    std::lock_guard lg(mMutex);
+     static const char* kViperLibPaths[] = {
+         "/vendor/lib64/soundfx/libviperaidl.so",
+         "/vendor/lib/soundfx/libviperaidl.so"

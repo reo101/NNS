@@ -1,0 +1,42 @@
+# Stage-1 phone probe only. No property publication, policy mutation or data repair.
+allow ksu nns_storage_exec file { getattr open read execute map }
+allow ksu nns_storage process { transition siginh rlimitinh }
+allow ksu nns_storage process2 nosuid_transition
+type_transition ksu nns_storage_exec process nns_storage
+allow nns_storage nns_storage_exec file { entrypoint getattr open read execute map }
+allow nns_storage ksu process sigchld
+allow nns_storage ksu fd use
+allow nns_storage nns_storage process getcap
+allow nns_storage nns_storage capability sys_admin
+allow nns_storage rootfs dir search
+allow nns_storage system_data_root_file dir search
+allow nns_storage nns_storage_file dir { getattr open read search lock ioctl }
+allowxperm nns_storage nns_storage_file dir ioctl 0x6616
+allowxperm nns_storage nns_storage_file dir ioctl 0x661a
+allow nns_storage nns_storage_config_file file { getattr open read }
+allow nns_storage nns_storage_image_file file { getattr open read write }
+allow kernel nns_storage_image_file file { getattr read write }
+allow nns_storage nns_storage_log_file file { getattr write }
+allow nns_storage null_device chr_file { getattr read write }
+allow nns_storage device dir search
+allow nns_storage block_device dir search
+allow nns_storage loop_control_device chr_file { getattr open read write ioctl }
+allowxperm nns_storage loop_control_device chr_file ioctl 0x4c82
+allow nns_storage loop_device blk_file { getattr open read write ioctl }
+allowxperm nns_storage loop_device blk_file ioctl 0x4c05
+allowxperm nns_storage loop_device blk_file ioctl 0x4c0a
+allow nns_storage sysfs dir search
+allow nns_storage sysfs lnk_file read
+allow nns_storage sysfs_devices_block dir search
+allow nns_storage sysfs_loop dir search
+allow nns_storage sysfs_loop file { getattr open read }
+allow nns_storage proc dir search
+allow nns_storage nns_storage dir search
+allow nns_storage nns_storage file { getattr open read }
+allow nns_storage nns_storage lnk_file read
+allow nns_storage unlabeled file { getattr read }
+allow nns_storage labeledfs filesystem { getattr mount }
+allow nns_storage system_data_file dir { getattr open read search mounton ioctl }
+allowxperm nns_storage system_data_file dir ioctl 0x941e
+allowxperm nns_storage system_data_file dir ioctl 0x941f
+allowxperm nns_storage system_data_file dir ioctl 0x943c

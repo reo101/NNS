@@ -74,7 +74,9 @@ if [ -e "$state/manager-generation" ] || [ -L "$state/manager-generation" ]; the
     previous=$(readlink -f "$state/manager-generation")
     check_directory "$previous"
     check_directory "${previous%/*}"
-    [ -f "$previous/service-manager" ] && [ -x "$previous/service-control" ] || fail 'unsupported previous generation'
+    # Legacy generations predate service-manager. Their own service-control
+    # can still stop them, so only the control script must be executable.
+    [ -x "$previous/service-control" ] || fail 'unsupported previous generation'
 fi
 # Include boot identity: a PID and its start time can both recur after reboot.
 process_identity() (

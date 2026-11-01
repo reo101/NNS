@@ -10,8 +10,15 @@ set_perm "$MODPATH/bin/nns-resolver" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/service.sh" 0 0 0755
 set_perm "$MODPATH/prepare-runtime.sh" 0 0 0755
+set_perm "$MODPATH/mount-ownership.sh" 0 0 0755
 
+. "$MODPATH/mount-ownership.sh" || abort "Cannot read mount ownership mode."
+nns_mount_mode || abort "Unsupported or unreadable mount ownership mode."
 "$MODPATH/bin/nns-storage" --check || abort "Configured Nix backing is not ready."
+if [ "$NNS_MOUNT_MODE" = rom ]; then
+  nns_check_global_mount || abort "The ROM global Nix mount is not ready."
+  umask 0022
+fi
 
 mkdir -p /data/nix/etc/nix /data/nix/var/log
 # Seed defaults on first install; preserve user configuration on upgrades.

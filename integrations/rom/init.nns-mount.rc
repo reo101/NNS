@@ -1,0 +1,12 @@
+service nns-mount /system/bin/nns-mount
+    user root
+    # /data is system:system 0771. Supplementary system permits traversal
+    # without DAC-bypass capabilities. Creation remains in the init domain.
+    group root system
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+on post-fs-data
+    nns_prepare_backing
+    exec_start nns-mount

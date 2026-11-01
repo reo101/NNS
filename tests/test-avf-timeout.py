@@ -45,6 +45,7 @@ class Pipe {
     fun close() { println("CLOSE") }
 }
 object VirtualMachineClient {
+    private fun trace(message: String) = Unit
 @ENTRY_POINT@
     private fun execute(arguments: Array<String>) {
         if (arguments[0] == "context") {

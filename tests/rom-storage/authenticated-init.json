@@ -1,0 +1,15 @@
+{
+  "system/core/init/property_service.cpp": {
+    "sha256": "3c569b56b36cf052e07aaeb2fed2644c6ef88519d5de5a7c808f0b543266891b",
+    "replacements": [
+      [
+        "        {\"ro.debuggable\", \"0\"},\n        {\"ro.force.debuggable\", \"0\"},\n        {\"ro.adb.secure\", \"1\"},",
+        "        {\"ro.debuggable\", \"1\"},\n        {\"ro.force.debuggable\", \"0\"},\n        {\"ro.adb.secure\", \"1\"},"
+      ],
+      [
+        "void LoadDebugProperties() {\n    const char* DEBUG_PROP = \"persist.sys.evox_debug_enabled\";\n    std::string error;\n    uint32_t res;\n\n    std::string debug_value = GetProperty(DEBUG_PROP, \"0\");\n    bool debug_enabled = debug_value == \"1\";\n    LOG(INFO) << DEBUG_PROP << \" = \" << debug_value;\n\n    const std::pair<const char*, const char*> debug_props[] = {\n        {\"service.adb.root\", debug_enabled ? \"1\" : \"0\"},\n        {\"ro.adb.secure\", debug_enabled ? \"0\" : \"1\"},\n        {\"ro.debuggable\", debug_enabled ? \"1\" : \"0\"},\n        {\"ro.force.debuggable\", debug_enabled ? \"1\" : \"0\"}\n    };",
+        "void LoadDebugProperties() {\n    std::string error;\n    uint32_t res;\n\n    // Disposable VM only: authenticate first, then permit an explicit root request.\n    const std::pair<const char*, const char*> debug_props[] = {\n        {\"service.adb.root\", \"0\"},\n        {\"ro.adb.secure\", \"1\"},\n        {\"ro.debuggable\", \"1\"},\n        {\"ro.force.debuggable\", \"0\"}\n    };"
+      ]
+    ]
+  }
+}

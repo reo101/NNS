@@ -1,0 +1,11 @@
+--- a/trusty/vendor/google/aosp/scripts/Android.bp
++++ b/trusty/vendor/google/aosp/scripts/Android.bp
+@@ -184,7 +184,7 @@
+     "PROTOC_PLUGIN_BINARY=$(location trusty_metrics_atoms_protoc_plugin) TRUSTY_SKIP_DOCS=true " +
+     "BUILDDATE=\"$$(date --date=@$$(cat $(build_date_file)))\" " +
+     "$(location build_trusty) --script-dir trusty/vendor/google/aosp/scripts --buildid \"$$(cat $(build_number_file))\" --verbose $$PROJECT_NAME " +
+-    "--build-root $(genDir)/build-root 1>$(genDir)/stdout.log 2>$(genDir)/stderr.log || (" +
++    "--jobs 8 --build-root $(genDir)/build-root 1>$(genDir)/stdout.log 2>$(genDir)/stderr.log || (" +
+     "echo Trusty build FAILED; echo stdout:; cat $(genDir)/stdout.log; echo stderr:; cat $(genDir)/stderr.log; false)) && " +
+     "cp -f $(genDir)/build-root/build-$$PROJECT_NAME/lk.$$OUT_EXT $(out)"
+ 

@@ -1,0 +1,20 @@
+type nns_mount, domain, coredomain;
+type nns_mount_exec, exec_type, file_type, system_file_type;
+init_daemon_domain(nns_mount)
+
+# Public capability declaration. Only init writes this read-only property.
+system_public_prop(nns_mount_owner_prop)
+get_prop(domain, nns_mount_owner_prop)
+set_prop(init, nns_mount_owner_prop)
+
+# Bind only. No filesystem mount/remount/unmount, daemon API, or store writes.
+allow nns_mount self:capability sys_admin;
+allow nns_mount rootfs:dir search;
+allow nns_mount system_data_root_file:dir search;
+allow nns_mount system_data_file:dir { getattr open read search lock mounton };
+allow nns_mount proc:dir search;
+allow nns_mount self:dir search;
+allow nns_mount self:file { getattr open read };
+allow nns_mount self:lnk_file read;
+allow nns_mount init:fd use;
+allow nns_mount { kmsg_device kmsg_debug_device }:chr_file { getattr write };

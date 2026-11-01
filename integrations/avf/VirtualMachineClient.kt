@@ -9,6 +9,7 @@ import android.os.ParcelFileDescriptor
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.lang.ref.Reference
 import java.nio.charset.StandardCharsets
@@ -24,7 +25,7 @@ import org.json.JSONObject
  */
 object VirtualMachineClient {
     private const val STATE_DIRECTORY = "/data/nix/var/avf"
-    private const val STORE_PATH = "/data/nix/store"
+    private const val STORE_PATH = "/data/nix"
     // Probe guest (no payload argument).
     private const val PROBE_KERNEL = "/data/local/tmp/nns-vmlinuz"
     private const val PROBE_INITRD = "/data/local/tmp/nns-probe-initramfs.cpio"
@@ -36,12 +37,26 @@ object VirtualMachineClient {
     private var memoryBytes: Long = 0
     private var protectedVm: Boolean = false
 
+    private val traceFile = File(STATE_DIRECTORY, "client.log")
+    private val consoleFile = File(STATE_DIRECTORY, "console-raw.log")
+    private val consoleSink: FileOutputStream by lazy { FileOutputStream(consoleFile, true) }
+
+    private fun trace(message: String) {
+        try {
+            traceFile.appendText("${System.currentTimeMillis()} $message\n")
+        } catch (_: Throwable) {
+        }
+    }
+
     @JvmStatic
     fun main(arguments: Array<String>) {
+        trace("main entered args=${arguments.joinToString(" ")}")
         try {
             execute(arguments)
+            trace("execute returned")
             System.exit(0)
         } catch (failure: Throwable) {
+            trace("failed: $failure")
             failure.printStackTrace()
             System.exit(1)
         }
@@ -72,6 +87,7 @@ object VirtualMachineClient {
         } else {
             buildProbeImage(sharedPathType, imageBuilderType)
         }
+        trace("image built")
 
         Looper.prepareMainLooper()
         val activityThread = Class.forName("android.app.ActivityThread")
@@ -93,6 +109,7 @@ object VirtualMachineClient {
             val instance = managerType.getConstructor(Context::class.java).newInstance(context)
             instance to (managerType.getMethod("getCapabilities").invoke(instance) as Int)
         }
+        trace("manager ready capabilities=$capabilities")
 
         val vmConfigType = Class.forName(
             "android.system.virtualmachine.VirtualMachineConfig"
@@ -200,6 +217,7 @@ object VirtualMachineClient {
 
     /** Attach an external vhost-user backend without the framework spawning crosvm fs. */
     private fun runWithFilesystemBackend(vmConfig: Any, socketPath: String) {
+        trace("filesystem backend entry socket=$socketPath")
         val convert = vmConfig.javaClass.getDeclaredMethod("toVsRawConfig")
         convert.isAccessible = true
         val rawConfig = convert.invoke(vmConfig)
@@ -224,6 +242,7 @@ object VirtualMachineClient {
         val acquire = serviceType.getDeclaredMethod("getInstance")
         acquire.isAccessible = true
         val service = withVirtualizationManagerContext { acquire.invoke(null) }
+        trace("VirtualizationService acquired: $service")
         val getBinder = serviceType.getDeclaredMethod("getBinder")
         getBinder.isAccessible = true
         val binder = getBinder.invoke(service)
@@ -237,6 +256,7 @@ object VirtualMachineClient {
         try {
             LocalSocket().use { socket ->
                 socket.connect(LocalSocketAddress(socketPath, LocalSocketAddress.Namespace.FILESYSTEM))
+                trace("connected to backend socket")
                 ParcelFileDescriptor.dup(socket.fileDescriptor).use { descriptor ->
                     storeShare.javaClass.getField("appDomain").setBoolean(storeShare, true)
                     storeShare.javaClass.getField("socketFd").set(storeShare, descriptor)
@@ -251,6 +271,7 @@ object VirtualMachineClient {
             logPipe[1].close()
             instanceType.getMethod("start").invoke(instance)
             running = true
+            trace("VM started")
             println("VM started; external read-only filesystem backend=$socketPath")
             val console = FileInputStream(consolePipe[0].fileDescriptor)
             val logs = FileInputStream(logPipe[0].fileDescriptor)
@@ -259,6 +280,7 @@ object VirtualMachineClient {
             while (System.currentTimeMillis() < deadline) {
                 val state = instanceType.getMethod("getState").invoke(instance) as Int
                 if (state != lastState) {
+                    trace("VM state: $state")
                     println("Raw VM state: $state")
                     lastState = state
                 }
@@ -458,6 +480,11 @@ object VirtualMachineClient {
         while (stream.available() > 0) {
             val read = stream.read(buffer, 0, minOf(buffer.size, stream.available()))
             if (read <= 0) break
+            try {
+                consoleSink.write(buffer, 0, read)
+                consoleSink.flush()
+            } catch (_: Throwable) {
+            }
             System.out.print(
                 "[$label] " + String(buffer, 0, read, StandardCharsets.UTF_8)
             )

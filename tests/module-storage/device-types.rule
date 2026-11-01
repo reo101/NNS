@@ -1,0 +1,19 @@
+# Stage-1 phone probe only. No executable is relabeled until verification passes.
+type nns_storage
+typeattribute nns_storage coredomain
+enforce nns_storage
+type nns_storage_exec file_type
+typeattribute nns_storage_exec exec_type
+typeattribute nns_storage_exec system_file_type
+type nns_storage_file file_type
+typeattribute nns_storage_file data_file_type
+typeattribute nns_storage_file core_data_file_type
+type nns_storage_config_file file_type
+typeattribute nns_storage_config_file data_file_type
+typeattribute nns_storage_config_file core_data_file_type
+type nns_storage_image_file file_type
+typeattribute nns_storage_image_file data_file_type
+typeattribute nns_storage_image_file core_data_file_type
+type nns_storage_log_file file_type
+typeattribute nns_storage_log_file data_file_type
+typeattribute nns_storage_log_file core_data_file_type

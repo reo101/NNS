@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.nns.signing.system" android:sharedUserId="android.uid.system">
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS_FULL" />
+    <application android:label="NNS signing system fixture" android:debuggable="true"
+        android:allowBackup="false" />
+    <instrumentation android:name="org.nns.signing.SigningStateInstrumentation"
+        android:targetPackage="org.nns.signing.system" />
+</manifest>

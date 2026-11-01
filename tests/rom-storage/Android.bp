@@ -1,0 +1,23 @@
+cc_binary {
+    name: "nns-storage-fixture",
+    srcs: ["fixture.c"],
+    static_executable: true,
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    init_rc: ["init.nns-storage-fixture.rc"],
+}
+
+prebuilt_etc {
+    name: "nns-storage-fixture-image",
+    src: "nix.btrfs",
+    filename: "nix.btrfs",
+    sub_dir: "nns-storage-fixture",
+}
+
+android_app {
+    name: "NnsStorageApplicationFixture",
+    srcs: ["application/**/*.java"],
+    manifest: "application/AndroidManifest.xml",
+    certificate: "platform",
+    platform_apis: true,
+    dex_preopt: { enabled: false },
+}

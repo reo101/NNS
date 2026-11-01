@@ -35,6 +35,10 @@ pkgs.writeShellApplication {
     adb -s "$serial" shell su -c "mv $stage/kernel $stage/initrd $stage/root_part $stage/vm_config.json $root/payload/"
     adb -s "$serial" shell su -c "mv $stage/avf-client.jar $stage/run-guest.sh $stage/virtiofsd-path $root/"
 
+    echo ">> preparing the writable build partition (16 GiB sparse)"
+    adb -s "$serial" shell "su -c 'if [ ! -e $root/payload/build_part ]; then truncate -s 16G $root/payload/build_part || dd if=/dev/zero of=$root/payload/build_part bs=1 count=0 seek=16G; fi'"
+    adb -s "$serial" shell "su -c 'chcon u:object_r:shell_data_file:s0 $root/payload/build_part'"
+
     echo ">> pushing the filesystem backend and guest closures into the phone's store"
     nix copy --to "ssh://nix-on-droid@$host:$port" ${virtiofsd}
     # The toplevel is the first nns.system= parameter in the payload's
@@ -44,6 +48,10 @@ pkgs.writeShellApplication {
     [ -n "$toplevel" ] || { echo "no nns.system= parameter found" >&2; exit 1; }
     echo "   toplevel: $toplevel"
     nix copy --to "ssh://nix-on-droid@$host:$port" "$toplevel"
+
+    echo ">> backing up the phone database for the guest store"
+    ssh -p "$port" "root@$host" 'nix run nixpkgs#sqlite -- /data/nix/var/nix/db/db.sqlite ".backup /data/nix/var/avf/db.sqlite"'
+    ssh -p "$port" "root@$host" 'nix-store --dump-db > /data/nix/var/avf/db-dump'
 
     echo ">> done; launch the guest with:"
     echo "   adb -s $serial shell su -c 'sh $root/run-guest.sh $root/payload'"

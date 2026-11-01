@@ -1,0 +1,12 @@
+--- a/build/soong/ui/build/soong.go
++++ b/build/soong/ui/build/soong.go
+@@ -226,6 +226,9 @@
+ 
+ 	commonArgs = append(commonArgs, "-l", filepath.Join(pb.config.FileListDir(), "Android.bp.list"))
+ 	invocationEnv := make(map[string]string)
++	if memoryLimit := os.Getenv("GOMEMLIMIT"); memoryLimit != "" {
++		invocationEnv["GOMEMLIMIT"] = memoryLimit
++	}
+ 	if pb.debugPort != "" {
+ 		//debug mode
+ 		commonArgs = append(commonArgs, "--delve_listen", pb.debugPort,

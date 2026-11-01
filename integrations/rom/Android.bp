@@ -1,0 +1,18 @@
+cc_binary {
+    name: "nns-mount",
+    srcs: ["nns-mount.c"],
+    static_libs: ["libnns_backing"],
+    static_executable: true,
+    stl: "none",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    init_rc: ["init.nns-mount.rc"],
+}
+
+cc_library_static {
+    name: "libnns_backing",
+    srcs: ["nns-backing.c"],
+    export_include_dirs: ["."],
+    recovery_available: true,
+    stl: "none",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+}

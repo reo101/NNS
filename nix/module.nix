@@ -17,6 +17,7 @@ stdenvNoCC.mkDerivation {
       ../module/post-fs-data.sh
       ../module/service.sh
       ../module/prepare-runtime.sh
+      ../module/mount-ownership.sh
       ../module/stage-etc.sh
       ../module/stage-android-runtime.sh
       ../module/system-generation.sh
@@ -37,7 +38,7 @@ stdenvNoCC.mkDerivation {
     cp ${dns}/lib/libnns-dns.so module/lib/libnns-dns.so
     cp ${rish}/bin/rish ${rish}/bin/su ${rish}/bin/sudo ${rish}/bin/rish-probe ${rish}/bin/nns-rish-terminal module/bin/
     cp ${rish}/lib/rish.dex module/lib/rish.dex
-    cp module.prop customize.sh post-fs-data.sh service.sh prepare-runtime.sh stage-etc.sh stage-android-runtime.sh system-generation.sh module/
+    cp module.prop customize.sh post-fs-data.sh service.sh prepare-runtime.sh mount-ownership.sh stage-etc.sh stage-android-runtime.sh system-generation.sh module/
     cp ${policy} module/sepolicy.rule
     substituteInPlace module/customize.sh --replace-fail '@ARCH@' '${arch}'
     # The app uid/gid/appId are assigned per install; every build names them.

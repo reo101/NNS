@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.nns.signing.application">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application android:label="NNS signing application fixture" android:debuggable="true"
+        android:allowBackup="false" />
+    <instrumentation android:name="org.nns.signing.SigningStateInstrumentation"
+        android:targetPackage="org.nns.signing.application" />
+</manifest>

@@ -44,6 +44,10 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
         hostLauncher = launcher.override {
           target = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl";
         };
+        romMountHelper = pkgs.callPackage ./nix/rom-mount-helper.nix { };
+        hostRomMountHelper = romMountHelper.override {
+          target = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl";
+        };
         androidPkgs = import inputs.nixpkgs {
           localSystem = system;
           crossSystem = lib.systems.examples.aarch64-android-prebuilt;
@@ -177,9 +181,11 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           nns-storage = storage;
           nns-storage-host = hostStorage;
           nns-dns = dns;
+          nns-rom-mount = romMountHelper;
           emacs-integration = emacs;
         } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           nix-enter-host = hostLauncher;
+          nns-rom-mount-host = hostRomMountHelper;
           test-userns = usernsTest;
           test-emacs = emacsTest;
           test-nns-activation = activationTest;
@@ -190,7 +196,16 @@ inputs.flake-parts.lib.mkFlake { inherit inputs; } (
           kernel-android-test = androidTestKernel;
           android-test-sdk = androidTestSdk;
           nns-module-x86_64 = moduleX86;
+          nns-rom-sepolicy = pkgs.callPackage ./nix/rom-sepolicy.nix { };
+          nns-rom-build-environment = pkgs.callPackage ./nix/rom-build-environment.nix { };
           test-android = androidTest.driver;
+          test-android-mount = pkgs.callPackage ./nix/android-mount-test.nix {
+            inherit sources;
+            androidSdk = androidTestSdk;
+            kernel = androidTestKernel;
+            helper = hostRomMountHelper;
+            apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
+          };
           android-vm-test = androidTest;
           android-test-apk = pkgs.callPackage ./nix/android-test-apk.nix { androidSdk = androidTestSdk; };
           avf-client = avfClient;

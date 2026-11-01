@@ -4,6 +4,10 @@ This candidate keeps the installed ROM and uses a root-manager supervisor. It is
 not included in the default module ZIP. It does not install or apply a SELinux
 policy. The caller must supply and verify the enforcing policy before use.
 
+Btrfs backing is not used. Directory mode remains the deployed mode. Measured
+throughput, mount-option tuning and a durability gap in the loop layer are in
+[Btrfs backing evaluation](../../benchmarks/storage-backends/README.md).
+
 Both programs are static Zig executables. The existing storage engine and its
 configuration format remain unchanged.
 

@@ -11,9 +11,9 @@ exec /data/nix/bin/nix-enter -- env LD_PRELOAD= /system/bin/sh -c '
   root=/data/nix/var/avf
   backend=$(cat "$root/virtiofsd-path")
   export NNS_VIRTIOFS_SOCKET="$root/nix-store-$$.sock"
-  "$backend" --shared-dir=/data/nix/store --tag=nix-store \
+  "$backend" --shared-dir=/data/nix --tag=nix-store \
     --socket-path="$NNS_VIRTIOFS_SOCKET" --sandbox=chroot --readonly \
-    --inode-file-handles=never --rlimit-nofile=0 > "$root/virtiofsd.log" 2>&1 &
+    --inode-file-handles=never --rlimit-nofile=1048576 > "$root/virtiofsd.log" 2>&1 &
   backend_pid=$!
   trap '\''kill "$backend_pid" 2>/dev/null || true; wait "$backend_pid" 2>/dev/null || true; rm -f "$NNS_VIRTIOFS_SOCKET"'\'' EXIT
   attempt=0

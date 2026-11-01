@@ -1,0 +1,20 @@
+--- a/tools/lib/bpf/libbpf.c
++++ b/tools/lib/bpf/libbpf.c
+@@ -8155,7 +8155,7 @@
+ 	struct bpf_object *obj = ctx;
+ 	const struct btf_type *t;
+ 	struct extern_desc *ext;
+-	char *res;
++	const char *res;
+ 
+ 	res = strstr(sym_name, ".llvm.");
+ 	if (sym_type == 'd' && res)
+@@ -11940,7 +11940,7 @@
+ 		if (!search_paths[i])
+ 			continue;
+ 		for (s = search_paths[i]; s != NULL; s = strchr(s, ':')) {
+-			char *next_path;
++			const char *next_path;
+ 			int seg_len;
+ 
+ 			if (s[0] == ':')

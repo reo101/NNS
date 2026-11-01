@@ -1,0 +1,40 @@
+# Disposable VM fixture only. Not part of the storage controller policy.
+type nns_storage_fixture, domain, coredomain;
+type nns_storage_fixture_exec, exec_type, file_type, system_file_type;
+type nns_storage_report_file, file_type, data_file_type, core_data_file_type;
+type nns_storage_probe_exec, file_type, data_file_type, core_data_file_type;
+init_daemon_domain(nns_storage_fixture)
+
+allow nns_storage_fixture system_data_root_file:dir search;
+allow nns_storage_fixture nns_storage_file:dir { getattr open read search write add_name ioctl };
+allowxperm nns_storage_fixture nns_storage_file:dir ioctl { 0x6616 };
+allow nns_storage_fixture nns_storage_image_file:file { create getattr open read write ioctl };
+allowxperm nns_storage_fixture nns_storage_image_file:file ioctl { 0x6616 };
+allow nns_storage_fixture nns_storage_config_file:file { create getattr open read write };
+type_transition nns_storage_fixture nns_storage_file:file nns_storage_image_file "nix.btrfs";
+type_transition nns_storage_fixture nns_storage_file:file nns_storage_config_file "backing.conf";
+allow nns_storage_fixture system_file:dir search;
+allow nns_storage_fixture system_file:file { getattr open read };
+allow nns_storage_fixture system_data_file:dir { getattr open read search write add_name };
+type_transition nns_storage_fixture system_data_file:file nns_storage_report_file "persistence-marker";
+type_transition nns_storage_fixture system_data_file:file nns_storage_report_file "boot-marker";
+allow nns_storage_fixture nns_storage_report_file:dir { getattr open read search write add_name };
+allow nns_storage_fixture nns_storage_report_file:file { create getattr setattr open read write };
+allow nns_storage_fixture proc:dir search;
+allow nns_storage_fixture self:dir search;
+allow nns_storage_fixture self:file { getattr open read };
+allow nns_storage_fixture self:lnk_file read;
+allow nns_storage_fixture selinuxfs:file { getattr open read };
+allow nns_storage_fixture proc_random:dir search;
+allow nns_storage_fixture proc_random:file { getattr open read };
+allow nns_storage_fixture init:fd use;
+allow nns_storage_fixture { kmsg_device kmsg_debug_device }:chr_file write;
+
+system_internal_prop(nns_storage_fixture_prop)
+set_prop(shell, nns_storage_fixture_prop)
+get_prop(init, nns_storage_fixture_prop)
+get_prop(nns_storage_fixture, nns_storage_fixture_prop)
+get_prop(nns_storage_fixture, nns_storage_state_prop)
+
+# This grants only the disposable probe executable, not arbitrary Nix data.
+allow platform_app nns_storage_probe_exec:file { getattr open read execute execute_no_trans map };

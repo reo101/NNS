@@ -1,0 +1,18 @@
+--- a/device/google/gs201/common.mk
++++ b/device/google/gs201/common.mk
+@@ -395,3 +395,15 @@
+ # Overlays
++# Prefer device-specific overlays over Pixel-style equivalents.
++PRODUCT_SOURCE_ROOT_DIRS += \
++    -vendor/pixel-style/rro_overlays/GlanceableHubConfigOverlay/ \
++    -vendor/pixel-style/rro_overlays/GlanceableHubSettingsConfigOverlay/ \
++    -vendor/pixel-style/rro_overlays/GlanceableHubSettingsConfigOverlay2022/ \
++    -vendor/pixel-style/rro_overlays/GlanceableHubSysuiConfigOverlay/ \
++    -vendor/pixel-style/rro_overlays/GoogleConfigOverlay/ \
++    -vendor/pixel-style/rro_overlays/GooglePermissionControllerSafetyCenterOverlay/ \
++    -vendor/pixel-style/rro_overlays/PixelConfigOverlay2019/ \
++    -vendor/pixel-style/rro_overlays/PixelConfigOverlay2021/ \
++    -vendor/pixel-style/rro_overlays/PixelConfigOverlayCommon/
++
+ PRODUCT_PACKAGES += \
+     EuiccSupportPixelOverlay \

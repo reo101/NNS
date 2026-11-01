@@ -1,0 +1,24 @@
+{
+  "system/sepolicy/private/domain.te": {
+    "sha256": "98a0116018354507c2c124b6f7537a77dec9b1a5d983af1566063515cc47fce3",
+    "replacements": [
+      [
+        "# Limit what domains can mount filesystems or change their mount flags.\n# sdcard_type (including vfat and exfat) and fusefs_type are exempt as a larger\n# set of domains need this capability, including device-specific domains.\nneverallow {\n    domain\n    -apexd\n",
+        "# These types must exist when platform policy is compiled, before system_ext.\n# The optional NNS storage integration supplies their service permissions.\ntype nns_storage, domain, coredomain;\ntype nns_storage_file, file_type, data_file_type, core_data_file_type;\n\n# Limit what domains can mount filesystems or change their mount flags.\n# sdcard_type (including vfat and exfat) and fusefs_type are exempt as a larger\n# set of domains need this capability, including device-specific domains.\nneverallow {\n    domain\n    -nns_storage\n    -apexd\n"
+      ],
+      [
+        "    -fusefs_type\n}:filesystem { mount remount relabelfrom relabelto };\n",
+        "    -fusefs_type\n}:filesystem { mount remount relabelfrom relabelto };\n\n# NNS can create labeled mounts, but cannot change or remove existing mounts.\nneverallow nns_storage fs_type:filesystem { remount unmount relabelfrom relabelto };\nneverallow nns_storage { fs_type -labeledfs }:filesystem mount;\n"
+      ]
+    ]
+  },
+  "system/sepolicy/private/vold.te": {
+    "sha256": "7b40d1e51338cc3a2fa4b317d84ce03e463af67481b59c28a8f99b509ce113d6",
+    "replacements": [
+      [
+        "# Only vold should ever add/remove file-based encryption keys.\nneverallowxperm {\n  domain\n  -vold\n} data_file_type:dir ioctl { FS_IOC_ADD_ENCRYPTION_KEY FS_IOC_REMOVE_ENCRYPTION_KEY FS_IOC_GET_ENCRYPTION_KEY_STATUS };",
+        "# Only vold should ever add/remove file-based encryption keys.\nneverallowxperm {\n  domain\n  -vold\n} data_file_type:dir ioctl { FS_IOC_ADD_ENCRYPTION_KEY FS_IOC_REMOVE_ENCRYPTION_KEY };\n\n# NNS can query key status through its private configuration directory only.\nneverallowxperm {\n  domain\n  -vold\n  -nns_storage\n} data_file_type:dir ioctl { FS_IOC_GET_ENCRYPTION_KEY_STATUS };\nneverallowxperm nns_storage { data_file_type -nns_storage_file }:dir ioctl { FS_IOC_GET_ENCRYPTION_KEY_STATUS };\n# Also forbid the separate remove-for-all-users ioctl for NNS.\nneverallowxperm nns_storage data_file_type:dir ioctl { 0x6619 };"
+      ]
+    ]
+  }
+}

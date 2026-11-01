@@ -2,20 +2,25 @@
 #
 # Shape follows nix-community/nixos-avf, minus the Terminal integration
 # (ttyd, storage balloon, graphics): the NNS client boots kernel+initrd
-# directly, so there is no bootloader and no ESP. There is no store image
-# at all: the root is a small writable ext4 holding only mountpoints, and
-# the guest's /nix/store IS the phone's store, mounted read-only over the
-# client's nix-store virtiofs share in the initrd (neededForBoot). The
-# nixos-init stack (systemd initrd, etc overlay, userborn) initializes
-# from the closure that the deploy script pushes into the phone's store -
-# the init= parameter selects stage 2 from it and the initrd resolves the
-# closure from that parameter. No activation scripts run anywhere.
+# directly, so there is no bootloader and no ESP. The root is a small
+# writable ext4 holding only mountpoints. The guest's /nix/store starts as
+# the phone's store, mounted read-only over the client's nix-store virtiofs
+# share in the initrd (neededForBoot), so the nixos-init stack (systemd
+# initrd, etc overlay, userborn) can start from the closure the deploy
+# script pushes into the phone's store. No activation scripts run.
+#
+# At boot the guest formats a second writable partition (nix-upper),
+# copies the running system closure and the phone database into it, and
+# bind-mounts it over /nix/store and /nix/var. The guest nix-daemon then
+# builds into that store with the Nix sandbox and nixbld users. The phone
+# store is the read-only source; the build partition is the writable store.
 #
 # The phone's nix daemon is reachable through the host's vsock bridge
-# (socat VSOCK-LISTEN:15555 on the phone, guest connects to CID 2); the
-# socket lands on the canonical path, so NIX_REMOTE=daemon works
-# unmodified: the daemon operates on the same directory the virtiofs
-# share serves.
+# (socat VSOCK-LISTEN:15555 on the phone, guest connects to CID 2) at
+# /run/nns-phone-daemon/socket. `nns-publish` copies finished outputs back
+# into the phone store through that bridge. The phone side proxies to the
+# supervised daemon socket, so the daemon sees a root client and accepts
+# unsigned guest outputs; it is a publication path, not the build path.
 { config, lib, modulesPath, pkgs, ... }:
 let
   serialDevice = "ttyS0";
@@ -24,6 +29,20 @@ let
       [ "@HELLO@" "@BASH@" "@COREUTILS@" ]
       [ (builtins.unsafeDiscardStringContext pkgs.hello.outPath) "${pkgs.bash}" "${pkgs.coreutils}" ]
       (builtins.readFile ../../tests/avf/nix-operations.sh));
+  publish = pkgs.writeShellApplication {
+    name = "nns-publish";
+    runtimeInputs = [ config.nix.package ];
+    text = ''
+      socket=/run/nns-phone-daemon/socket
+      if [ ! -S "$socket" ]; then
+        echo "phone daemon bridge is not available at $socket" >&2
+        exit 1
+      fi
+      export NIX_REMOTE=
+      export NIX_DAEMON_SOCKET_PATH="$socket"
+      exec nix copy --no-check-sigs --to daemon "$@"
+    '';
+  };
 in
 {
   imports = [ "${modulesPath}/profiles/qemu-guest.nix" ];
@@ -35,6 +54,7 @@ in
   system.nixos-init.enable = true;
   system.etc.overlay.enable = true;
   services.userborn.enable = true;
+  documentation.enable = false;
 
   # No bootloader: the client passes kernel+initrd to crosvm directly, so
   # there is no ESP and nothing to install; the bare ext4 root is /dev/vda.
@@ -50,10 +70,12 @@ in
     "systemd.journald.forward_to_console=1"
   ];
   boot.kernelModules = [
+    "overlay"
     "virtio_vsock"
     "vhost_vsock"
     "virtiofs"
   ];
+  boot.kernel.sysctl."fs.file-max" = 1048576;
   boot.initrd.availableKernelModules = [
     "squashfs"
     "fuse"
@@ -69,12 +91,12 @@ in
     neededForBoot = true;
   };
 
-  # The phone's store over the client's nix-store virtiofs share, mounted
-  # by the initrd so the closure (and stage 2) is reachable before switch-
-  # root. x-initrd.mount keeps the mount out of the initrd cleanup's reach;
-  # ro because every write goes through the phone's daemon, which operates
-  # on the very same directory host-side.
-  fileSystems."/nix/store" = {
+  # The phone's /data/nix (store and var) over the client's nix-store
+  # virtiofs share, mounted by the initrd so the closure (and stage 2) is
+  # reachable before switch-root. It is the read-only lower layer for the
+  # guest store overlays; the build partition is the upper layer. ro
+  # because every phone-side write goes through the phone daemon.
+  fileSystems."/nix" = {
     device = "nix-store";
     fsType = "virtiofs";
     neededForBoot = true;
@@ -95,28 +117,103 @@ in
   services.getty.autologinUser = "root";
   users.users.root.initialHashedPassword = "";
 
-  environment.systemPackages = with pkgs; [
-    coreutils
-    nix
-    socat
+  environment.systemPackages = [
+    pkgs.coreutils
+    pkgs.e2fsprogs
+    pkgs.socat
+    pkgs.util-linux
+    publish
   ];
 
-  # Even guest root must use the phone daemon, not open a local store DB.
+  # Guest clients use the guest daemon. The phone bridge is a separate
+  # socket used only for publication.
   environment.variables.NIX_REMOTE = "daemon";
-  nix.settings.experimental-features = [ "nix-command" ];
-
-  # Only the phone owns this store; do not start a competing guest daemon.
-  systemd.sockets.nix-daemon.enable = false;
-  systemd.services.nix-daemon.enable = false;
+  nix.package = pkgs.nixVersions.latest;
+  nix.settings = {
+    experimental-features = [ "nix-command" "flakes" ];
+    sandbox = true;
+    build-users-group = "nixbld";
+    require-sigs = false;
+    builders = lib.mkForce "";
+    max-jobs = 2;
+    keep-outputs = true;
+    keep-derivations = true;
+  };
+  nix.nrBuildUsers = 8;
 
   systemd.services.phone-nix-daemon-bridge = {
     description = "Phone nix daemon over the AVF vsock bridge";
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
-      ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p /nix/var/nix/daemon-socket";
-      ExecStart = "${pkgs.socat}/bin/socat UNIX-LISTEN:/nix/var/nix/daemon-socket/socket,fork,unlink-early VSOCK-CONNECT:2:15555";
+      ExecStartPre = "${lib.getExe' pkgs.coreutils "mkdir"} -p /run/nns-phone-daemon";
+      ExecStart = "${lib.getExe pkgs.socat} UNIX-LISTEN:/run/nns-phone-daemon/socket,fork,unlink-early VSOCK-CONNECT:2:15555";
       Restart = "always";
       RestartSec = 1;
+    };
+  };
+
+  systemd.services.nns-build-store = {
+    description = "Prepare the writable guest store";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "multi-user.target" "nix-daemon.service" ];
+    after = [ "local-fs.target" "phone-nix-daemon-bridge.service" ];
+    requires = [ "phone-nix-daemon-bridge.service" ];
+    unitConfig.RequiresMountsFor = [ "/nix" ];
+    path = [ pkgs.coreutils pkgs.e2fsprogs pkgs.findutils pkgs.gnugrep pkgs.util-linux config.nix.package ];
+    script = ''
+      set -euo pipefail
+      trap 'echo "nns-guest: GUEST STORE FAILED" >&2' ERR
+      device=/dev/disk/by-partlabel/nix-upper
+      for attempt in $(seq 1 50); do
+        [ -b "$device" ] && break
+        if [ -b /dev/vda2 ]; then device=/dev/vda2; break; fi
+        sleep 0.2
+      done
+      [ -b "$device" ] || { echo 'nns-guest: BUILD PARTITION MISSING' >&2; exit 1; }
+      mkdir -p /build
+      if [ "$(blkid -s TYPE -o value "$device" 2>/dev/null)" != "ext4" ]; then
+        mkfs.ext4 -F -L nix-upper "$device"
+      fi
+      mountpoint -q /build || mount "$device" /build
+      mkdir -p /build/nix/store /build/nix/var/nix/db
+      cp /nix/var/avf/db.sqlite /build/nix/var/nix/db/db.sqlite
+      socket=/run/nns-phone-daemon/socket
+      for attempt in $(seq 1 100); do
+        [ -S "$socket" ] && break
+        sleep 0.2
+      done
+      [ -S "$socket" ] || { echo 'nns-guest: PHONE STORE UNREACHABLE' >&2; exit 1; }
+      system=$(readlink -f /run/current-system)
+      nix path-info --store 'local?store=/nix/store&root=/build' --recursive "$system" \
+        | xargs -r -n 50 \
+          cp -a -t /build/nix/store --
+      mkdir -p /build/nix/var/nix/gcroots /build/nix/var/nix/daemon-socket
+      rm -f /build/nix/var/nix/daemon-socket/socket
+      ln -sfn "$system" /build/nix/var/nix/gcroots/current-system
+      mount --bind /build/nix/store /nix/store || { echo 'nns-guest: STORE BIND FAILED' >&2; exit 1; }
+      findmnt -no SOURCE,TARGET,FSTYPE,OPTIONS /nix/store || true
+      mount --bind /build/nix/var /nix/var || { echo 'nns-guest: VAR BIND FAILED' >&2; exit 1; }
+      echo 'nns-guest: GUEST STORE READY'
+    '';
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      TimeoutStartSec = 900;
+      LimitNOFILE = 262144;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
+    };
+  };
+
+  systemd.sockets.nix-daemon.enable = lib.mkForce false;
+  systemd.services.nix-daemon = {
+    enable = lib.mkForce true;
+    wantedBy = lib.mkForce [ "multi-user.target" ];
+    after = [ "nns-build-store.service" ];
+    requires = [ "nns-build-store.service" ];
+    serviceConfig = {
+      ExecStart = lib.mkForce [ "" "${config.nix.package}/bin/nix-daemon --daemon" ];
+      Sockets = lib.mkForce [ ];
     };
   };
 
@@ -126,7 +223,7 @@ in
     before = [ "initrd-switch-root.service" ];
     unitConfig = {
       DefaultDependencies = false;
-      RequiresMountsFor = [ "/sysroot/nix/store" "/sysroot/etc" ];
+      RequiresMountsFor = [ "/sysroot/nix" "/sysroot/etc" ];
     };
     path = [ pkgs.coreutils ];
     script = ''
@@ -134,7 +231,7 @@ in
       echo "nns-guest: absolute store symlink"
       readlink "$unit_dir/-.slice"
       echo "nns-guest: relative store symlink"
-      readlink /sysroot${pkgs.bash}/bin/sh
+      readlink /sysroot${lib.getExe' pkgs.bash "sh"}
       echo "nns-guest: STORE SYMLINK READS SUCCEEDED"
     '';
     serviceConfig = {
@@ -146,29 +243,54 @@ in
 
   # Self-verification: the client relays the console, so the proof lands
   # in the phone-side output without any guest access.
-  systemd.services.phone-daemon-proof = {
-    description = "Verify Nix realisation and builds through the phone daemon";
+  systemd.services.guest-build-proof = {
+    description = "Verify a sandboxed guest build and phone publication";
     wantedBy = [ "multi-user.target" ];
-    after = [ "phone-nix-daemon-bridge.service" ];
-    path = [ pkgs.coreutils pkgs.nix ];
+    after = [ "nns-build-store.service" "phone-nix-daemon-bridge.service" "network.target" ];
+    path = [ pkgs.coreutils config.nix.package pkgs.util-linux ];
+    script = ''
+      exec > /dev/console 2>&1
+      exec ${nixOperationsProof}
+    '';
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      TimeoutStartSec = 120;
-      ExecStart = pkgs.writeShellScript "phone-daemon-proof" ''
-        exec > /dev/console 2>&1
-        echo "nns-guest: pinging the phone's daemon over the vsock bridge"
-        for attempt in {1..10}; do
-          if NIX_REMOTE=daemon ${pkgs.coreutils}/bin/timeout 5 \
-            ${pkgs.nix}/bin/nix --extra-experimental-features nix-command store info; then
-            echo "nns-guest: PHONE DAEMON REACHABLE"
-            exec ${nixOperationsProof}
-          fi
-          ${pkgs.coreutils}/bin/sleep 1
-        done
-        echo "nns-guest: PHONE DAEMON UNREACHABLE"
-        exit 1
-      '';
+      TimeoutStartSec = 900;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
+    };
+  };
+
+  systemd.services.nix-daemon-debug = {
+    description = "Dump the Nix daemon journal after the proof";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "guest-build-proof.service" "multi-user.target" ];
+    path = [ pkgs.systemd pkgs.coreutils pkgs.util-linux ];
+    script = ''
+      exec > /dev/console 2>&1
+      echo "nns-guest: SYSTEM STATE $(systemctl is-system-running 2>/dev/null || true)"
+      echo "nns-guest: MULTI USER $(systemctl show -p ActiveState --value multi-user.target)"
+      systemctl status nix-daemon.service --no-pager || true
+      journalctl -u nix-daemon.service -b --no-pager | tail -120 || true
+      findmnt -no SOURCE,TARGET,FSTYPE,OPTIONS /nix || true
+      findmnt -no SOURCE,TARGET,FSTYPE,OPTIONS /nix/store || true
+      findmnt -no SOURCE,TARGET,FSTYPE,OPTIONS /build || true
+      grep -E ' /nix| /build' /proc/self/mountinfo || true
+      ls -la /nix/var/nix/daemon-socket /build/nix/var/nix/db || true
+      pid=$(systemctl show -p MainPID --value nix-daemon.service)
+      echo "nns-guest: daemon pid=$pid"
+      cat "/proc/$pid/wchan" || true
+      echo
+      grep -E ' /nix| /build' "/proc/$pid/mountinfo" || true
+      grep -E 'daemon-socket' /proc/net/unix || true
+      ls -l "/proc/$pid/fd" || true
+      ss -xlp 2>/dev/null | grep -i nix || true
+    '';
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      StandardOutput = "journal+console";
+      StandardError = "journal+console";
     };
   };
 
@@ -181,8 +303,7 @@ in
       exec > /dev/console 2>&1
       if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
         --retry 3 --retry-all-errors --retry-delay 2 \
-        --user-agent 'OpenAI File Downloader, XaiImageApiFetch/1.0' \
-        https://cache.nixos.org/nix-cache-info | grep -qx 'StoreDir: /nix/store'; then
+        'https://cache.nixos.org/nix-cache-info' | grep -qx 'StoreDir: /nix/store'; then
         ip -brief address
         ip route
         echo 'nns-guest: GUEST DNS AND HTTPS SUCCEEDED'
@@ -199,14 +320,15 @@ in
     };
   };
 
-  system.stateVersion = "25.05";
+  system.stateVersion = "26.11";
 
   # The payload: kernel+initrd for direct loading by the client, a small
   # empty root image (orphan_file stripped: Android's e2fsck lacks the
   # feature, same fix as nixos-avf) with the mountpoints the boot needs,
-  # and the client's vm_config.json. The store is not part of the payload:
-  # the deploy script pushes the guest closure into the phone's store,
-  # which the initrd mounts over virtiofs.
+  # and the client's vm_config.json. The writable build partition is a
+  # sparse file the deploy script creates on the phone; the guest formats
+  # it on first boot. The store is not part of the payload: the guest
+  # seeds it from the phone store at boot.
   system.build.nnsAvfPayload =
     let
       vmConfig = pkgs.writeText "vm_config.json" (builtins.toJSON {
@@ -229,6 +351,11 @@ in
                 path = "$PAYLOAD_DIR/root_part";
                 writable = true;
               }
+              {
+                label = "nix-upper";
+                path = "$PAYLOAD_DIR/build_part";
+                writable = true;
+              }
             ];
           }
         ];
@@ -239,22 +366,48 @@ in
       # checks /usr/lib/systemd/systemd and /sbin/init and has no cmdline
       # init= fallback - a store-only root has neither without these).
       # Both point into the phone store, reachable through virtiofs.
-      rootDirs = pkgs.writeText "nns-avf-root-dirs.cmds" ''
-        mkdir /nix
-        mkdir /nix/store
-        mkdir /nix/var
-        mkdir /etc
-        mkdir /run
-        mkdir /var
-        mkdir /var/log
-        mkdir /tmp
-        mkdir /proc
-        mkdir /sys
-        mkdir /dev
-        mkdir /usr
-        mkdir /usr/lib
-        mkdir /usr/lib/systemd
-        mkdir /sbin
+      rootDirs = pkgs.writeText "nns-avf-root-dirs.cmds" /* bash */ ''
+        # mkdir /nix
+        # mkdir /nix/store
+        # mkdir /nix/var
+        # mkdir /build
+        # mkdir /etc
+        # mkdir /run
+        # mkdir /var
+        # mkdir /var/log
+        # mkdir /tmp
+        # mkdir /proc
+        # mkdir /sys
+        # mkdir /dev
+        # mkdir /usr
+        # mkdir /usr/lib
+        # mkdir /usr/lib/systemd
+        # mkdir /sbin
+
+        ${lib.pipe [
+          "/nix"
+          "/nix/store"
+          "/nix/var"
+          "/build"
+          "/etc"
+          "/run"
+          "/var"
+          "/var/log"
+          "/tmp"
+          "/proc"
+          "/sys"
+          "/dev"
+          "/usr"
+          "/usr/lib"
+          "/usr/lib/systemd"
+          "/sbin"
+        ] [
+          (lib.toposort lib.hasPrefix)
+          (lib.getAttr "result")
+          (lib.map (p: /* bash */ "mkdir ${lib.escapeShellArg p}"))
+          (lib.concatStringsSep "\n")
+        ]}
+
         symlink /usr/lib/systemd/systemd ${config.systemd.package}/lib/systemd/systemd
         symlink /sbin/init ${config.systemd.package}/lib/systemd/systemd
       '';
@@ -264,10 +417,10 @@ in
       cp ${config.boot.kernelPackages.kernel}/${config.system.boot.loader.kernelFile} $out/kernel
       cp ${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile} $out/initrd
       truncate -s 512M $out/root_part
-      ${pkgs.e2fsprogs}/bin/mkfs.ext4 -F -L nixos-root $out/root_part
+      ${lib.getExe' pkgs.e2fsprogs "mkfs.ext4"} -F -L nixos-root $out/root_part
       # cp inherits the store's 444 mode; debugfs needs write access.
       chmod u+w $out/root_part
-      ${pkgs.e2fsprogs}/bin/debugfs -w -f ${rootDirs} $out/root_part
+      ${lib.getExe' pkgs.e2fsprogs "debugfs"} -w -f ${rootDirs} $out/root_part
       cp ${vmConfig} $out/vm_config.json
     '';
 }

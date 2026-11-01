@@ -1,0 +1,16 @@
+{
+  "system/core/init/Android.bp": {
+    "sha256": "da1f40d38866a9d2210beb614e25be55a38537901bee50da999bb5becb04b605",
+    "replacements": [
+      ["    generated_sources: [\n        \"apex-info-list\",\n    ],\n    whole_static_libs: [\n        \"libcap\",", "    generated_sources: [\n        \"apex-info-list\",\n    ],\n    whole_static_libs: [\n        \"libnns_backing\",\n        \"libcap\","]
+    ]
+  },
+  "system/core/init/builtins.cpp": {
+    "sha256": "bc3968c342470bc6604b7f41ea3255cc9fa66349a5274e9985b4bdf3f4beda91",
+    "replacements": [
+      ["#include \"builtins.h\"\n", "#include \"builtins.h\"\n#include \"nns-backing.h\"\n"],
+      ["// mkdir <path> [mode] [owner] [group] [<option> ...]", "#include \"nns-init.inc\"\n\n// mkdir <path> [mode] [owner] [group] [<option> ...]"],
+      ["        {\"mkdir\",                   {1,     6,    {true,   do_mkdir}}},", "        {\"mkdir\",                   {1,     6,    {true,   do_mkdir}}},\n        {\"nns_prepare_backing\",      {0,     0,    {false,  do_nns_prepare_backing}}},"]
+    ]
+  }
+}

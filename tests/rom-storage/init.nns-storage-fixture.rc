@@ -1,0 +1,42 @@
+service nns-storage-fixture /system/bin/nns-storage-fixture ${sys.nns.storage.fixture.action}
+    user root
+    group root system
+    capabilities CHOWN FOWNER
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+service nns-storage-consumer /system/bin/nns-storage-fixture runtime
+    user root
+    group root system
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+on post-fs-data
+    # Permit the normal explicit adb root request, without starting adbd as root.
+    mkdir /data/adbroot 0700 root root
+    write /data/adbroot/enabled 1
+    chmod 0600 /data/adbroot/enabled
+    mkdir /data/nns-storage 0700 root root encryption=Require
+    mkdir /data/nns-storage-results 0755 root root encryption=Require
+
+on property:sys.nns.storage.fixture.action=prepare
+    exec_start nns-storage-fixture
+
+on property:sys.nns.storage.fixture.action=inspect
+    exec_start nns-storage-fixture
+
+on property:sys.nns.storage.fixture.action=write
+    exec_start nns-storage-fixture
+
+on property:sys.nns.storage.fixture.action=mount
+    umount /nix
+    umount /data/nix
+    exec_start nns-storage
+    exec_start nns-storage-fixture
+
+on property:sys.nns.storage.fixture.action=unmount
+    umount /nix
+    umount /data/nix
+    exec_start nns-storage-fixture

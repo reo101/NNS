@@ -1,0 +1,4 @@
+/system/bin/nns-storage u:object_r:nns_storage_exec:s0
+/data/nns-storage u:object_r:nns_storage_file:s0
+/data/nns-storage/[^/]+ -- u:object_r:nns_storage_image_file:s0
+/data/nns-storage/backing\.conf -- u:object_r:nns_storage_config_file:s0

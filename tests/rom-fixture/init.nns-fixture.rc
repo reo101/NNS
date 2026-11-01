@@ -1,0 +1,84 @@
+service nns-fixture /system/bin/nns-fixture ${sys.nns.fixture.action}
+    user root
+    group root system
+    capabilities CHOWN FOWNER
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+service nns-fixture-complete /system/bin/nns-fixture complete-encrypted
+    user root
+    group root system
+    capabilities CHOWN FOWNER
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+service nns-fixture-observe /system/bin/nns-fixture inspect
+    user root
+    group root system
+    capabilities CHOWN FOWNER
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+service nns-fixture-validate-move /system/bin/nns-fixture prepare-invalid
+    user root
+    group root system
+    capabilities CHOWN FOWNER
+    disabled
+    oneshot
+    stdio_to_kmsg
+
+on post-fs-data
+    mkdir /data/nns-fixture 0775 root system encryption=Require
+    mkdir /data/nns-fixture/conflict 0755 root root
+
+on property:sys.nns.fixture.action=inspect
+    exec_start nns-fixture
+
+on property:sys.nns.fixture.action=prepare-encrypted
+    exec_start nns-fixture
+
+on property:sys.nns.fixture.ready=1
+    setprop sys.nns.fixture.ready 0
+    mkdir /data/nix 0755 root root encryption=Require
+    exec_start nns-fixture-complete
+
+on property:sys.nns.fixture.action=restart-mount
+    exec_start nns-mount
+    exec_start nns-fixture
+
+on property:sys.nns.fixture.action=conflicting-mount
+    umount /nix
+    mount none /data/nns-fixture/conflict /nix bind
+    exec_start nns-mount
+    exec_start nns-fixture-observe
+
+on property:sys.nns.fixture.action=stacked-mount
+    mount none /data/nix /nix bind
+    exec_start nns-mount
+    exec_start nns-fixture-observe
+
+on property:sys.nns.fixture.action=restore-mount
+    umount /nix
+    umount /nix
+    exec_start nns-mount
+    exec_start nns-fixture-observe
+
+on property:sys.nns.fixture.action=invalid-backing
+    setprop sys.nns.fixture.moved 0
+    umount /nix
+    exec - 12345 12345 system -- /system/bin/toybox mv -nT /data/nix /data/nns-fixture/saved-backing
+    exec_start nns-fixture-validate-move
+
+on property:sys.nns.fixture.moved=1
+    write /data/nix nns-invalid-backing
+    exec_start nns-mount
+
+on property:sys.nns.fixture.action=restore-backing
+    setprop sys.nns.fixture.moved 0
+    rm /data/nix
+    exec - 12345 12345 system -- /system/bin/toybox mv -nT /data/nns-fixture/saved-backing /data/nix
+    exec_start nns-mount
+    exec_start nns-fixture-observe

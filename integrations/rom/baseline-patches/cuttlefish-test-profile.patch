@@ -1,0 +1,50 @@
+--- a/vendor/lineage/build/target/product/lineage_cf_phone_x86_64.mk
++++ b/vendor/lineage/build/target/product/lineage_cf_phone_x86_64.mk
+@@ -7,6 +7,9 @@
+ 
+ TARGET_DISABLE_EPPE := true
+ TARGET_NO_KERNEL_OVERRIDE := true
++TARGET_RO_FILE_SYSTEM_TYPE := ext4
++
++PRODUCT_SOURCE_ROOT_DIRS += -packages/apps/FaceUnlock/Android.bp
+ 
+ # Overrides
+ PRODUCT_NAME := lineage_cf_phone_x86_64
+
+--- a/device/google/cuttlefish/vsoc_x86_64/BoardConfig.mk
++++ b/device/google/cuttlefish/vsoc_x86_64/BoardConfig.mk
+@@ -52,3 +52,5 @@
+ ifneq ($(BOARD_IS_AUTOMOTIVE), true)
+ -include device/google/cuttlefish/shared/virgl/BoardConfig.mk
+ endif
++
++PRODUCT_SOONG_NAMESPACES := $(filter-out vendor/google_devices/common/proprietary/confirmatioui_hal,$(PRODUCT_SOONG_NAMESPACES))
+
+--- a/device/google/cuttlefish/shared/sepolicy/vendor/telephony/libcuttlefish_rild.te
++++ b/device/google/cuttlefish/shared/sepolicy/vendor/telephony/libcuttlefish_rild.te
+@@ -14,4 +14,6 @@
+ typeattribute libcuttlefish_rild unconstrained_vsock_violators;
+ ')
+ allow libcuttlefish_rild self:{ socket vsock_socket } { create_socket_perms_no_ioctl getattr };
++userdebug_or_eng(`
+ allow libcuttlefish_rild su:{ socket udp_socket } { create_socket_perms_no_ioctl getattr };
++')
+
+--- a/vendor/lineage/config/evolution.mk
++++ b/vendor/lineage/config/evolution.mk
+@@ -43,6 +43,7 @@
+     BtHelper
+ 
+ # Face Unlock
++ifneq ($(TARGET_PRODUCT),lineage_cf_phone_x86_64)
+ ifeq ($(TARGET_SUPPORTS_64_BIT_APPS),true)
+ PRODUCT_PACKAGES += \
+     FaceUnlock
+@@ -53,6 +54,7 @@
+ PRODUCT_COPY_FILES += \
+     frameworks/native/data/etc/android.hardware.biometrics.face.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/android.hardware.biometrics.face.xml
+ endif
++endif
+ 
+ # Cloned app exemption
+ PRODUCT_COPY_FILES += \

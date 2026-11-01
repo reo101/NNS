@@ -22,7 +22,40 @@ su -c '/data/adb/modules/nix/bin/nix-enter <command>'
 ```
 
 Everything the command spawns (fork/exec) inherits a root view with `/nix`.
-The launcher does not change the global root.
+The launcher does not change the global root. On an integrated ROM, init
+separately supplies the global `/nix` mount.
+
+## ROM-owned mounts
+
+An integrated ROM declares `ro.nns.mount.owner=init`. Without this property,
+the module keeps its legacy setup. An unsupported value or a property read
+failure stops NNS setup instead of selecting a different mode.
+
+In ROM-owned mode, `post-fs-data.sh` defers runtime preparation to `service.sh`.
+KernelSU blocks init during `post-fs-data`. Waiting there for the ROM's mount
+action can prevent that action from running.
+
+Before installation or runtime preparation writes under `/data/nix`, the module
+requires init's mount namespace and a successful `/system/bin/nns-mount --check`.
+The check requires one bind with the expected directory identity and flags.
+It never creates backing, mounts, repairs flags or removes conflicts. If the
+check fails, NNS startup stops. Android boot does not depend on NNS startup.
+
+The module does not chmod, chown or relabel the existing backing, store root
+or `var` root in this mode. It still updates its own launchers, resolver,
+configuration and service state. These updates can create children and change
+directory timestamps. This is not a promise that all backing contents or
+metadata stay unchanged throughout boot. Android's own restorecon also remains
+outside the mount helper's preservation contract.
+
+The launcher keeps its private session view. ROM ownership does not grant
+ordinary Android apps access to execute store paths. No NoD mount setting or
+backing-path change is required.
+
+The ownership branch passes host shell regressions. The updated Android image,
+property policy and root-manager boot sequence still require native validation.
+See [Cheetah upgrade compatibility](../integrations/rom/cheetah-upgrade.md) before
+planning ROM deployment.
 
 ## Optional Btrfs backing
 
@@ -85,6 +118,10 @@ runtime writes. The early `post-fs-data.sh` hook only reads the configuration.
 Installation and direct runtime preparation require an already mounted volume.
 Install the module before selecting an unmounted image in the configuration.
 
+In ROM-owned mode, the module only checks the backing. It never mounts it after
+init's `/nix` bind. The current ROM integration does not set up image backing.
+Do not select this backend there until init provides that earlier mount stage.
+
 For a semi-manual migration:
 
 1. Prepare an image with features supported by the target kernel. Reserve both
@@ -133,7 +170,8 @@ Its execution probe reports `namespace=0` when Android denies namespace
 metadata. This does not replace the separate mount-propagation checks.
 
 The Zig port passes the Linux Btrfs-on-F2FS regression and a separate
-locked-key configuration test. ARM64 and x86-64 builds pass.
+locked-key configuration test. ARM64 and x86-64 builds pass. The optional ROM
+controller is also Zig. Nix builds its static archive, and Soong links Bionic.
 These checks do not establish Android boot or phone compatibility for the port.
 
 ## Why this is weird (device constraints, all verified empirically)

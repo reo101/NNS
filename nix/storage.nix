@@ -20,6 +20,7 @@ stdenvNoCC.mkDerivation {
     fileset = lib.fileset.unions [
       ../build.zig
       ../build.zig.zon
+      ../integrations/rom/storage/controller.zig
       ../module/src/nns-storage.zig
       ../module/src/syscall-error.zig
       ../module/src/storage-linux.h
@@ -38,6 +39,7 @@ stdenvNoCC.mkDerivation {
       -Dlinux-headers=${headers}/include --prefix "$PWD/result"
   '';
   installPhase = ''
+    install -Dm644 result/lib/libnns-storage-controller.a "$out/lib/libnns-storage-controller.a"
     install -Dm755 result/bin/nns-storage "$out/bin/nns-storage"
     install -Dm755 result/bin/nns-storage-supervisor "$out/bin/nns-storage-supervisor"
     install -Dm755 result/bin/nns-storage-module-controller "$out/bin/nns-storage-module-controller"

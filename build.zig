@@ -160,6 +160,21 @@ pub fn build(b: *std.Build) void {
         storage.root_module.addImport("linux_uapi", translation.mod);
         storage.root_module.addImport("syscall_error", syscall_error_target);
         storage_step.dependOn(&b.addInstallArtifact(storage, .{}).step);
+        const controller_module = b.createModule(.{
+            .root_source_file = b.path("integrations/rom/storage/controller.zig"),
+            .target = target,
+            .optimize = optimize,
+            .pic = true,
+            .strip = optimize != .debug,
+        });
+        controller_module.addImport("storage", storage_module);
+        const controller = b.addLibrary(.{ .name = "nns-storage-controller", .linkage = .static, .root_module = controller_module });
+        storage_step.dependOn(&b.addInstallArtifact(controller, .{}).step);
+        const device_fixture = executable(b, "nns-storage-device-probe", "tests/module-storage/device-probe.zig", target, optimize, false);
+        device_fixture.root_module.addImport("linux_uapi", translation.mod);
+        device_fixture.root_module.addImport("syscall_error", syscall_error_target);
+        const device_fixture_step = b.step("storage-device-fixture", "Install the scratch-device storage probe");
+        device_fixture_step.dependOn(&b.addInstallArtifact(device_fixture, .{}).step);
         const probes = b.step("native-probes", "Install static namespace and storage probes");
         all.dependOn(probes);
         inline for (.{ "bind-remount", "fscrypt-policy", "storage-execution" }) |name| {
@@ -170,6 +185,16 @@ pub fn build(b: *std.Build) void {
         }
     } else storage_step.dependOn(&b.addFail("pass -Dlinux-headers=/path/to/target/linux/include").step);
 
+    const mount = cExecutable(b, "nns-mount", target, optimize, &.{ "integrations/rom/nns-mount.c", "integrations/rom/nns-backing.c" });
+    install(b, all, "mount", mount);
+    const preparation = cExecutable(b, "nns-prepare-backing", target, optimize, &.{ "tests/rom-prepare-backing.c", "integrations/rom/nns-backing.c" });
+    const race = cExecutable(b, "nns-mount-race", target, optimize, &.{ "tests/rom-mount-race.c", "integrations/rom/nns-backing.c" });
+    race.root_module.addCSourceFile(.{ .file = b.path("integrations/rom/nns-mount.c"), .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-Dmount=nns_test_mount" } });
+    inline for (.{ mount, preparation, race }) |exe| exe.root_module.addIncludePath(b.path("integrations/rom"));
+    const mount_fixtures = b.step("mount-fixtures", "Install native mount test executables");
+    mount_fixtures.dependOn(&b.addInstallArtifact(preparation, .{}).step);
+    mount_fixtures.dependOn(&b.addInstallArtifact(race, .{}).step);
+    all.dependOn(mount_fixtures);
     b.getInstallStep().dependOn(all);
 }
 

@@ -39,7 +39,13 @@ stdenvNoCC.mkDerivation {
       ../module/src/storage-linux.h
       ../integrations/shizuku/rish-terminal.zig
       ../integrations/shizuku/rish-terminal.h
+      ../integrations/rom/storage/controller.zig
+      ../integrations/rom/nns-mount.c
+      ../integrations/rom/nns-backing.c
+      ../integrations/rom/nns-backing.h
       ../experiments/activation/service-control.zig
+      ../tests/rom-prepare-backing.c
+      ../tests/rom-mount-race.c
       ../tests/android/bind-remount.zig
       ../tests/android/fscrypt-policy.zig
       ../tests/android/storage-execution.zig

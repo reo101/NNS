@@ -1,0 +1,16 @@
+--- a/vendor/gms/product/blobs/product_blobs.mk
++++ b/vendor/gms/product/blobs/product_blobs.mk
+@@ -49,8 +49,11 @@
+     privapp-permissions-glasses-core \
+     privapp-permissions-google-p \
+     privapp-permissions-google-pearl \
+-    features-verizon \
+-    split-permissions-google
++    features-verizon
++
++ifneq ($(TARGET_PRODUCT),lineage_cf_phone_x86_64)
++PRODUCT_PACKAGES += split-permissions-google
++endif
+ 
+ # Preffered app list
+ PRODUCT_PACKAGES += \

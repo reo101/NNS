@@ -1,0 +1,24 @@
+java_defaults {
+    name: "nns-signing-state-defaults",
+    srcs: ["src/*.kt"],
+    platform_apis: true,
+    min_sdk_version: "35",
+    target_sdk_version: "36",
+}
+
+// Lab image only. Never inherit this package from the production ROM product.
+android_app {
+    name: "NnsSigningSystemFixture",
+    defaults: ["nns-signing-state-defaults"],
+    manifest: "system/AndroidManifest.xml",
+    certificate: "platform",
+    privileged: true,
+}
+
+// Install this unchanged APK through the lab's private ADB connection.
+android_test_helper_app {
+    name: "NnsSigningApplicationFixture",
+    defaults: ["nns-signing-state-defaults"],
+    manifest: "application/AndroidManifest.xml",
+    certificate: "testkey",
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <extend-project name="build" path="build/make" revision="d029f2917532024a5d5788cf024c0067eaf88e23" />
+  <extend-project name="build_soong" path="build/soong" revision="8dc46958b4c2614bdfe5250cde4d0642a1d5d231" />
+  <extend-project name="system_sepolicy" path="system/sepolicy" revision="e631d35d7bd7b7993e84f3d49eeb34ec87dd1a27" />
+  <project name="device_google_cheetah" path="device/google/cheetah" remote="evo-devices" revision="bcbebf6963ead3404cc3d676f88feb4e5c1698af" />
+  <project name="device_google_pantah" path="device/google/pantah" remote="evo-devices" revision="ddbe96d217dfc7a217311a6ef1b2fd43b3fd4f6a" />
+  <project name="device_google_gs201" path="device/google/gs201" remote="evo-devices" revision="ee46554b1746800c16561c0e9b00d4d79b830cdc" />
+  <project name="device_google_gs-common" path="device/google/gs-common" remote="evo-devices" revision="52b4e62c80f982e895da2b13b6421e1055423b4d" />
+  <project name="vendor_google_cheetah" path="vendor/google/cheetah" remote="evo-devices" revision="2c981fe0f0be5e61c24f76d287f223a21a813497" />
+  <project name="LineageOS/android_device_google_pantah-kernels" path="device/google/pantah-kernels" remote="github" revision="bc7dd5505feae60e4fa29da161a3595e97d3c689" />
+</manifest>

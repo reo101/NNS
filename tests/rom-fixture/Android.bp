@@ -1,0 +1,8 @@
+cc_binary {
+    name: "nns-fixture",
+    srcs: ["fixture.c"],
+    stl: "none",
+    cflags: ["-Wall", "-Wextra", "-Werror"],
+    shared_libs: ["libcrypto", "libselinux"],
+    init_rc: ["init.nns-fixture.rc"],
+}

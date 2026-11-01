@@ -1,0 +1,13 @@
+--- a/build/soong/android/rule_builder.go
++++ b/build/soong/android/rule_builder.go
+@@ -668,6 +668,10 @@
+ 		nsjailCmd.WriteString(" -R /dev")
+ 		nsjailCmd.WriteString(" -R /usr")
+ 
++		// Nix FHS tools use absolute interpreter and library paths in the store.
++		nsjailCmd.WriteString(" -R /nix/store")
++		nsjailCmd.WriteString(" -R /etc/ld.so.cache")
++
+ 		nsjailCmd.WriteString(" -m none:/tmp:tmpfs:size=1073741824") // 1GB, should be enough
+ 		nsjailCmd.WriteString(" -D nsjail_build_sandbox")
+ 		nsjailCmd.WriteString(" --disable_rlimits")

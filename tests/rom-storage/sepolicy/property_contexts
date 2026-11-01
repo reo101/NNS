@@ -1,0 +1,2 @@
+sys.nns.storage.fixture.action u:object_r:nns_storage_fixture_prop:s0 exact string
+ro.nns.storage.fixture u:object_r:nns_storage_fixture_prop:s0 exact bool

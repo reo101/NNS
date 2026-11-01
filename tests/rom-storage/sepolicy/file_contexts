@@ -1,0 +1,4 @@
+/system/bin/nns-storage-fixture u:object_r:nns_storage_fixture_exec:s0
+/data/nns-storage-results(/.*)? u:object_r:nns_storage_report_file:s0
+/(data/nix|nix)/storage-execution u:object_r:nns_storage_probe_exec:s0
+/(data/nix|nix)/(marker|persistence-marker|boot-marker) u:object_r:nns_storage_report_file:s0

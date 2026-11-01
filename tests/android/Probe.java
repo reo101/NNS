@@ -28,6 +28,26 @@ public final class Probe extends Instrumentation {
             String domain = new String(Files.readAllBytes(Paths.get("/proc/self/attr/current")), StandardCharsets.UTF_8);
             if (uid < 10000 || !status.contains("Seccomp:\t2") || !domain.contains(":untrusted_app:"))
                 throw new AssertionError("not an ordinary filtered app: uid=" + uid + " domain=" + domain + "\n" + status);
+            if ("global-mount".equals(arguments.getString("mode"))) {
+                android.system.StructStat source = Os.stat("/data/nix");
+                android.system.StructStat target = Os.stat("/nix");
+                if (source.st_dev != target.st_dev || source.st_ino != target.st_ino)
+                    throw new AssertionError("/nix is not the backing directory");
+                String proof = new String(Files.readAllBytes(Paths.get("/nix/mount-proof")), StandardCharsets.UTF_8);
+                if (!"global-store\n".equals(proof))
+                    throw new AssertionError("global store content missing");
+                try {
+                    Os.open("/nix/app-write", android.system.OsConstants.O_CREAT |
+                        android.system.OsConstants.O_WRONLY, 0600);
+                    throw new AssertionError("app can write the root-owned backing directory");
+                } catch (android.system.ErrnoException expected) {
+                    if (expected.errno != android.system.OsConstants.EACCES)
+                        throw expected;
+                }
+                result.putString("result", "NNS-GLOBAL-MOUNT-PASS");
+                finish(-1, result);
+                return;
+            }
             if (new File("/nix/store").exists()) throw new AssertionError("/nix leaked outside launcher");
             String ns = Os.readlink("/proc/self/ns/user");
             File home = getTargetContext().getFilesDir();

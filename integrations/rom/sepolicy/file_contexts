@@ -1,0 +1,2 @@
+/nix(/.*)?                 u:object_r:system_data_file:s0
+/system/bin/nns-mount       u:object_r:nns_mount_exec:s0

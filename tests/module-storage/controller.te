@@ -1,0 +1,10 @@
+# Disposable userdebug VM only: su models the root-manager supervisor domain.
+# The existing enforcing nns_storage domain keeps its mount/ioctl restrictions.
+allow su nns_storage:process { transition siginh rlimitinh };
+allow su nns_storage:process2 nosuid_transition;
+type_transition su nns_storage_exec:process nns_storage;
+allow nns_storage su:process sigchld;
+allow nns_storage su:fd use;
+allow nns_storage self:process getcap;
+# The supervisor's caller opens the log. The controller cannot open these files.
+allow nns_storage shell_data_file:file { getattr write };
